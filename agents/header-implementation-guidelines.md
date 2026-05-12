@@ -1,0 +1,43 @@
+# Header Implementation Guidelines
+
+## File Ownership
+
+- `.hpp` files own public declarations, small inline functions, templates, and
+  API documentation.
+- `.ipp` files may be introduced for template-heavy definitions when a public
+  header becomes noisy.
+- `.cpp` files may be introduced for examples, tests, or future compiled
+  implementation details.
+
+## Include Policy
+
+- Do not use `../` in `#include` directives.
+- Prefer stable public headers under `event_hub/`.
+- When one header includes another header from the same directory, use the short
+  relative path, for example `#include "event_bus.hpp"` instead of
+  `#include "event_hub/event_bus.hpp"`.
+- Keep public headers dependency-light and standard-library-only.
+- Include what each header uses.
+
+## Umbrella Header
+
+`include/event_hub.hpp` is the primary umbrella header. Consumers can
+include it for the full library:
+
+```cpp
+#include <event_hub.hpp>
+```
+
+Leaf headers may be included directly when a consumer needs only part of the
+API:
+
+```cpp
+#include <event_hub/event_bus.hpp>
+#include <event_hub/event_endpoint.hpp>
+```
+
+## Public APIs
+
+Public headers should expose concepts and contracts, not incidental
+implementation structure. Keep API comments focused on guarantees, ownership,
+lifetime, threading, and error behavior.

@@ -1,0 +1,8 @@
+prefix=${pcfiledir}/../..
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: event-hub-cpp
+Description: Lightweight C++ event bus for modular applications
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}
+Libs:

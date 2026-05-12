@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, stable ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }} / C++${{ matrix.std }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        std: [ 17, 20 ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DEVENT_HUB_CPP_BUILD_TESTS=ON -DEVENT_HUB_CPP_BUILD_EXAMPLES=ON -DCMAKE_CXX_STANDARD=${{ matrix.std }}
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Install
+        run: cmake --install build --prefix install --config Release
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Configure install consumer
+        run: cmake -S tests/install_consumer -B build-consumer -DCMAKE_PREFIX_PATH="${{ github.workspace }}/install" -DCMAKE_CXX_STANDARD=${{ matrix.std }}
+      - name: Build install consumer
+        run: cmake --build build-consumer --config Release
+      - name: Test install consumer
+        run: ctest --test-dir build-consumer -C Release --output-on-failure
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.os }}-cxx${{ matrix.std }}
+          path: |
+            build/CMakeFiles/CMakeOutput.log
+            build/Testing/Temporary/LastTest.log
+            build-consumer/CMakeFiles/CMakeOutput.log
+            build-consumer/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+
+  linux-extras:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [ asan-ubsan, vcpkg-install ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (asan-ubsan)
+        if: matrix.suite == 'asan-ubsan'
+        run: cmake -S . -B build -DEVENT_HUB_CPP_BUILD_TESTS=ON -DEVENT_HUB_CPP_BUILD_EXAMPLES=ON -DCMAKE_CXX_STANDARD=17 -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
+      - name: Build (asan-ubsan)
+        if: matrix.suite == 'asan-ubsan'
+        run: cmake --build build
+      - name: Test (asan-ubsan)
+        if: matrix.suite == 'asan-ubsan'
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Install vcpkg
+        if: matrix.suite == 'vcpkg-install'
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+      - name: Validate vcpkg overlay port
+        if: matrix.suite == 'vcpkg-install'
+        run: ./vcpkg/vcpkg install event-hub-cpp --overlay-ports=vcpkg-overlay/ports
+      - name: Configure vcpkg consumer
+        if: matrix.suite == 'vcpkg-install'
+        run: cmake -S tests/install_consumer -B build-vcpkg-consumer -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      - name: Build vcpkg consumer
+        if: matrix.suite == 'vcpkg-install'
+        run: cmake --build build-vcpkg-consumer
+      - name: Test vcpkg consumer
+        if: matrix.suite == 'vcpkg-install'
+        run: ctest --test-dir build-vcpkg-consumer --output-on-failure
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.suite }}
+          path: |
+            build/CMakeFiles/CMakeOutput.log
+            build/Testing/Temporary/LastTest.log
+            build-vcpkg-consumer/CMakeFiles/CMakeOutput.log
+            build-vcpkg-consumer/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

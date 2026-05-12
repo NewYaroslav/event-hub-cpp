@@ -1,0 +1,409 @@
+#pragma once
+#ifndef EVENT_HUB_EVENT_ENDPOINT_HPP_INCLUDED
+#define EVENT_HUB_EVENT_ENDPOINT_HPP_INCLUDED
+
+/// \file event_endpoint.hpp
+/// \brief Defines the RAII module endpoint for EventBus.
+
+#include "event_awaiter.hpp"
+#include "event_bus.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+namespace event_hub {
+
+/// \class EventEndpoint
+/// \brief RAII connection point that owns subscriptions and awaiters.
+///
+/// An endpoint is usually owned by one module. Destroying it cancels awaiters
+/// and removes all subscriptions registered through the endpoint. Endpoint
+/// subscriptions carry a lifetime guard so callbacks copied by an active
+/// dispatch are skipped if the endpoint guard has already expired.
+///
+/// Use the overloads that take `std::weak_ptr` when callbacks also touch an
+/// object whose lifetime is separate from the endpoint. In that case both the
+/// endpoint guard and the user guard must still be alive before user code runs.
+///
+/// \note EventBus must outlive every EventEndpoint connected to it.
+class EventEndpoint {
+public:
+    /// \brief Construct an endpoint connected to a bus.
+    /// \param bus Event bus that must outlive this endpoint.
+    explicit EventEndpoint(EventBus& bus)
+        : m_bus(bus),
+          m_guard(std::make_shared<int>(0)) {}
+
+    EventEndpoint(const EventEndpoint&) = delete;
+    EventEndpoint& operator=(const EventEndpoint&) = delete;
+    EventEndpoint(EventEndpoint&&) = delete;
+    EventEndpoint& operator=(EventEndpoint&&) = delete;
+
+    /// \brief Cancel awaiters and remove subscriptions owned by this endpoint.
+    ~EventEndpoint() {
+        close();
+    }
+
+    /// \brief Cancel awaiters and remove subscriptions owned by this endpoint.
+    ///
+    /// Closing is idempotent. It expires the endpoint lifetime guard, cancels
+    /// awaiters created through the endpoint, and removes endpoint-owned
+    /// subscriptions from the bus.
+    ///
+    /// Callbacks that have already started, or that already passed their guard
+    /// check, are not stopped or waited for.
+    void close() {
+        if (!m_closed) {
+            m_closed = true;
+            m_guard.reset();
+        }
+
+        cancel_awaiters();
+        unsubscribe_all();
+    }
+
+    /// \brief Return true after this endpoint has been explicitly closed.
+    /// \return True after close() has been called.
+    bool is_closed() const noexcept {
+        return m_closed;
+    }
+
+    /// \brief Return the bus referenced by this endpoint.
+    /// \return Mutable event bus reference.
+    EventBus& bus() noexcept {
+        return m_bus;
+    }
+
+    /// \brief Return the bus referenced by this endpoint.
+    /// \return Const event bus reference.
+    const EventBus& bus() const noexcept {
+        return m_bus;
+    }
+
+    /// \brief Subscribe this endpoint to a concrete event type.
+    /// \tparam EventType Concrete event type to receive.
+    /// \tparam Callback Callback type invocable with `const EventType&`.
+    /// \param callback Callback invoked when EventType is dispatched.
+    /// \return Subscription id that can be used for targeted unsubscription.
+    ///
+    /// The subscription uses the endpoint lifetime guard. Closing or destroying
+    /// the endpoint prevents guarded callbacks from starting later.
+    template <typename EventType,
+              typename Callback,
+              typename std::enable_if<
+                  std::is_invocable_v<Callback&, const EventType&>,
+                  int>::type = 0>
+    EventBus::SubscriptionId subscribe(Callback&& callback) {
+        return m_bus.subscribe<EventType>(
+            this,
+            guard(),
+            std::forward<Callback>(callback));
+    }
+
+    /// \brief Subscribe with an additional user lifetime guard.
+    /// \tparam EventType Concrete event type to receive.
+    /// \tparam Guard Type stored by the user weak guard.
+    /// \tparam Callback Callback type invocable with `const EventType&`.
+    /// \param user_guard Additional weak guard that must lock before the
+    /// callback is invoked.
+    /// \param callback Callback invoked when EventType is dispatched.
+    /// \return Subscription id that can be used for targeted unsubscription.
+    ///
+    /// The bus record still uses the endpoint guard. The user guard is checked
+    /// inside the endpoint-owned callback, so both guards must be valid before
+    /// user code runs.
+    template <typename EventType,
+              typename Guard,
+              typename Callback,
+              typename std::enable_if<
+                  std::is_invocable_v<Callback&, const EventType&>,
+                  int>::type = 0>
+    EventBus::SubscriptionId subscribe(std::weak_ptr<Guard> user_guard,
+                                       Callback&& callback) {
+        std::function<void(const EventType&)> typed_callback(
+            std::forward<Callback>(callback));
+
+        return m_bus.subscribe<EventType>(
+            this,
+            guard(),
+            [user_guard = std::move(user_guard),
+             callback = std::move(typed_callback)](const EventType& event) mutable {
+                auto alive = user_guard.lock();
+                if (!alive) {
+                    return;
+                }
+
+                callback(event);
+            });
+    }
+
+    /// \brief Subscribe an EventListener through this endpoint.
+    /// \tparam EventType Event type derived from event_hub::Event.
+    /// \param listener Listener whose on_event() method is invoked.
+    /// \return Subscription id that can be used for targeted unsubscription.
+    template <typename EventType>
+    EventBus::SubscriptionId subscribe(EventListener& listener) {
+        return m_bus.subscribe<EventType>(this, guard(), listener);
+    }
+
+    /// \brief Subscribe an EventListener with an additional user guard.
+    /// \tparam EventType Event type derived from event_hub::Event.
+    /// \tparam Guard Type stored by the user weak guard.
+    /// \param user_guard Additional weak guard that must lock before listener
+    /// invocation.
+    /// \param listener Listener whose on_event() method is invoked.
+    /// \return Subscription id that can be used for targeted unsubscription.
+    template <typename EventType, typename Guard>
+    EventBus::SubscriptionId subscribe(std::weak_ptr<Guard> user_guard,
+                                       EventListener& listener) {
+        return subscribe<EventType>(
+            std::move(user_guard),
+            [&listener](const EventType& event) {
+                listener.on_event(event);
+            });
+    }
+
+    /// \brief Remove all subscriptions for a concrete event type.
+    /// \tparam EventType Concrete event type to unsubscribe.
+    template <typename EventType>
+    void unsubscribe() {
+        m_bus.template unsubscribe_all<EventType>(this);
+    }
+
+    /// \brief Remove one subscription by id.
+    /// \param id Subscription id returned by subscribe().
+    void unsubscribe(EventBus::SubscriptionId id) {
+        m_bus.unsubscribe(id);
+    }
+
+    /// \brief Remove all subscriptions owned by this endpoint.
+    ///
+    /// This removes future records from the bus storage, but it does not wait
+    /// for callbacks that already started.
+    void unsubscribe_all() {
+        m_bus.unsubscribe_all(this);
+    }
+
+    /// \brief Dispatch an already constructed event synchronously.
+    /// \tparam EventType Concrete event type to dispatch.
+    /// \param event Event object to dispatch.
+    /// \throws Any callback exception when no exception handler is configured
+    /// on the bus.
+    template <typename EventType>
+    void emit(const EventType& event) const {
+        m_bus.emit<EventType>(event);
+    }
+
+    /// \brief Construct and dispatch an event synchronously.
+    /// \tparam EventType Concrete event type to construct and dispatch.
+    /// \tparam Args Constructor argument types.
+    /// \param args Arguments used to construct the event.
+    /// \throws Any callback exception when no exception handler is configured
+    /// on the bus.
+    template <typename EventType,
+              typename... Args,
+              typename std::enable_if<
+                  !detail::IsSingleEventArgument<EventType, Args...>::value,
+                  int>::type = 0>
+    void emit(Args&&... args) const {
+        m_bus.template emit<EventType>(std::forward<Args>(args)...);
+    }
+
+    /// \brief Queue an already constructed event for later processing.
+    /// \tparam EventType Concrete event type to queue.
+    /// \param event Event object to copy into the queue.
+    template <typename EventType>
+    void post(const EventType& event) {
+        m_bus.template post<EventType>(event);
+    }
+
+    /// \brief Queue an already constructed event for later processing.
+    /// \tparam EventType Concrete event type to queue.
+    /// \param event Event object to move into the queue.
+    template <typename EventType>
+    void post(EventType&& event) {
+        m_bus.template post<EventType>(std::move(event));
+    }
+
+    /// \brief Construct and queue an event for later processing.
+    /// \tparam EventType Concrete event type to construct and queue.
+    /// \tparam Args Constructor argument types.
+    /// \param args Arguments used to construct the queued event.
+    template <typename EventType,
+              typename... Args,
+              typename std::enable_if<
+                  !detail::IsSingleEventArgument<EventType, Args...>::value,
+                  int>::type = 0>
+    void post(Args&&... args) {
+        m_bus.template post<EventType>(std::forward<Args>(args)...);
+    }
+
+    /// \brief Await one matching event and then auto-cancel.
+    /// \tparam EventType Concrete event type to await.
+    /// \tparam Predicate Predicate type invocable with `const EventType&`.
+    /// \tparam Callback Callback type invocable with `const EventType&`.
+    /// \param predicate Predicate that selects matching events.
+    /// \param callback Callback invoked for the first matching event.
+    /// \param options Timeout and cancellation options.
+    /// \return Shared cancelable awaiter handle.
+    ///
+    /// Timeouts and cancellation tokens are checked when the bus polls
+    /// awaiters from emit() or process().
+    template <typename EventType,
+              typename Predicate,
+              typename Callback,
+              typename std::enable_if<
+                  std::is_invocable_v<Predicate&, const EventType&> &&
+                      std::is_invocable_v<Callback&, const EventType&>,
+                  int>::type = 0>
+    std::shared_ptr<IAwaiter> await_once(Predicate&& predicate,
+                                         Callback&& callback,
+                                         AwaitOptions options = {}) {
+        return make_awaiter<EventType>(std::forward<Predicate>(predicate),
+                                       std::forward<Callback>(callback),
+                                       std::move(options),
+                                       true);
+    }
+
+    /// \brief Await the next event without a predicate.
+    /// \tparam EventType Concrete event type to await.
+    /// \tparam Callback Callback type invocable with `const EventType&`.
+    /// \param callback Callback invoked for the next event of EventType.
+    /// \param options Timeout and cancellation options.
+    /// \return Shared cancelable awaiter handle.
+    template <typename EventType,
+              typename Callback,
+              typename std::enable_if<
+                  std::is_invocable_v<Callback&, const EventType&>,
+                  int>::type = 0>
+    std::shared_ptr<IAwaiter> await_once(Callback&& callback,
+                                         AwaitOptions options = {}) {
+        return await_once<EventType>(
+            [](const EventType&) { return true; },
+            std::forward<Callback>(callback),
+            std::move(options));
+    }
+
+    /// \brief Await each matching event until the returned handle is cancelled.
+    /// \tparam EventType Concrete event type to await.
+    /// \tparam Predicate Predicate type invocable with `const EventType&`.
+    /// \tparam Callback Callback type invocable with `const EventType&`.
+    /// \param predicate Predicate that selects matching events.
+    /// \param callback Callback invoked for each matching event.
+    /// \param options Timeout and cancellation options.
+    /// \return Shared cancelable awaiter handle.
+    template <typename EventType,
+              typename Predicate,
+              typename Callback,
+              typename std::enable_if<
+                  std::is_invocable_v<Predicate&, const EventType&> &&
+                      std::is_invocable_v<Callback&, const EventType&>,
+                  int>::type = 0>
+    std::shared_ptr<IAwaiter> await_each(Predicate&& predicate,
+                                         Callback&& callback,
+                                         AwaitOptions options = {}) {
+        return make_awaiter<EventType>(std::forward<Predicate>(predicate),
+                                       std::forward<Callback>(callback),
+                                       std::move(options),
+                                       false);
+    }
+
+    /// \brief Await every event of the type until the returned handle is cancelled.
+    /// \tparam EventType Concrete event type to await.
+    /// \tparam Callback Callback type invocable with `const EventType&`.
+    /// \param callback Callback invoked for each event of EventType.
+    /// \param options Timeout and cancellation options.
+    /// \return Shared cancelable awaiter handle.
+    template <typename EventType,
+              typename Callback,
+              typename std::enable_if<
+                  std::is_invocable_v<Callback&, const EventType&>,
+                  int>::type = 0>
+    std::shared_ptr<IAwaiter> await_each(Callback&& callback,
+                                         AwaitOptions options = {}) {
+        return await_each<EventType>(
+            [](const EventType&) { return true; },
+            std::forward<Callback>(callback),
+            std::move(options));
+    }
+
+    /// \brief Cancel all awaiters created by this endpoint.
+    ///
+    /// Cancellation is idempotent for each awaiter. This does not affect
+    /// awaiters created directly through EventAwaiter::create().
+    void cancel_awaiters() noexcept {
+        std::vector<std::shared_ptr<IAwaiter>> awaiters;
+        {
+            std::lock_guard<std::mutex> lock(m_awaiters_mutex);
+            awaiters.swap(m_awaiters);
+        }
+
+        for (auto& awaiter : awaiters) {
+            if (awaiter) {
+                awaiter->cancel();
+            }
+        }
+    }
+
+private:
+    template <typename EventType,
+              typename Predicate,
+              typename Callback,
+              typename std::enable_if<
+                  std::is_invocable_v<Predicate&, const EventType&> &&
+                      std::is_invocable_v<Callback&, const EventType&>,
+                  int>::type = 0>
+    std::shared_ptr<IAwaiter> make_awaiter(Predicate&& predicate,
+                                           Callback&& callback,
+                                           AwaitOptions options,
+                                           bool single_shot) {
+        prune_awaiters();
+
+        using Awaiter = EventAwaiter<EventType>;
+        auto awaiter = Awaiter::create(
+            m_bus,
+            std::function<bool(const EventType&)>(std::forward<Predicate>(predicate)),
+            std::function<void(const EventType&)>(std::forward<Callback>(callback)),
+            std::move(options),
+            single_shot,
+            guard());
+
+        std::shared_ptr<IAwaiter> handle = awaiter;
+        {
+            std::lock_guard<std::mutex> lock(m_awaiters_mutex);
+            m_awaiters.emplace_back(handle);
+        }
+        return handle;
+    }
+
+    void prune_awaiters() {
+        std::lock_guard<std::mutex> lock(m_awaiters_mutex);
+        m_awaiters.erase(std::remove_if(m_awaiters.begin(),
+                                        m_awaiters.end(),
+                                        [](const std::shared_ptr<IAwaiter>& awaiter) {
+                                            return !awaiter || !awaiter->is_active();
+                                        }),
+                         m_awaiters.end());
+    }
+
+private:
+    std::weak_ptr<void> guard() const {
+        return m_guard;
+    }
+
+    EventBus& m_bus;
+    std::shared_ptr<void> m_guard;
+    bool m_closed = false;
+    std::mutex m_awaiters_mutex;
+    std::vector<std::shared_ptr<IAwaiter>> m_awaiters;
+};
+
+} // namespace event_hub
+
+#endif // EVENT_HUB_EVENT_ENDPOINT_HPP_INCLUDED

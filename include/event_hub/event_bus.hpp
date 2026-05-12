@@ -1,0 +1,575 @@
+#pragma once
+#ifndef EVENT_HUB_EVENT_BUS_HPP_INCLUDED
+#define EVENT_HUB_EVENT_BUS_HPP_INCLUDED
+
+/// \file event_bus.hpp
+/// \brief Defines the central typed event bus.
+
+#include "awaiter_interfaces.hpp"
+#include "event.hpp"
+#include "event_listener.hpp"
+#include "notifier.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <cstdint>
+#include <exception>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <queue>
+#include <type_traits>
+#include <typeindex>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace event_hub {
+
+namespace detail {
+
+template <typename EventType, typename... Args>
+struct IsSingleEventArgument : std::false_type {};
+
+template <typename EventType, typename Arg>
+struct IsSingleEventArgument<EventType, Arg>
+    : std::is_same<typename std::decay<Arg>::type, EventType> {};
+
+} // namespace detail
+
+template <typename EventType>
+class EventAwaiter;
+
+/// \class EventBus
+/// \brief Central typed event bus with synchronous and queued dispatch.
+///
+/// Subscriptions are keyed by concrete C++ type. `post<T>()` is safe for
+/// producer threads; callbacks are invoked on the thread that calls `emit<T>()`
+/// or `process()`. Guarded subscriptions are skipped when their guard expires
+/// before the callback starts.
+///
+/// The bus copies matching callback records before dispatch and releases its
+/// subscription mutex before invoking user code. Handlers may therefore post,
+/// subscribe, unsubscribe, or cancel awaiters while an event is being handled.
+///
+/// \note EventBus must outlive all EventEndpoint and EventAwaiter instances
+/// that reference it.
+class EventBus {
+public:
+    /// \brief Unique subscription identifier.
+    using SubscriptionId = std::uint64_t;
+
+    /// \brief Callback used to observe exceptions thrown by user callbacks.
+    using ExceptionHandler = std::function<void(std::exception_ptr)>;
+
+    /// \brief Construct an empty event bus.
+    EventBus() = default;
+    EventBus(const EventBus&) = delete;
+    EventBus& operator=(const EventBus&) = delete;
+    EventBus(EventBus&&) = delete;
+    EventBus& operator=(EventBus&&) = delete;
+
+    /// \brief Set a non-owning notifier called after events are queued.
+    ///
+    /// The caller must keep the notifier alive while producer threads may call
+    /// post(), or call reset_notifier() before destroying it.
+    ///
+    /// \param notifier Non-owning notifier pointer, or null to disable
+    /// notifications.
+    void set_notifier(INotifier* notifier) noexcept {
+        m_notifier.store(notifier, std::memory_order_release);
+    }
+
+    /// \brief Remove the currently configured notifier.
+    void reset_notifier() noexcept {
+        m_notifier.store(nullptr, std::memory_order_release);
+    }
+
+    /// \brief Set a handler for exceptions thrown by user callbacks.
+    ///
+    /// When a handler is set, dispatch reports callback exceptions to it and
+    /// continues. Without a handler, callback exceptions are rethrown.
+    ///
+    /// \param handler Handler to install. Passing an empty handler restores
+    /// fail-fast dispatch behavior.
+    void set_exception_handler(ExceptionHandler handler) {
+        std::lock_guard<std::mutex> lock(m_exception_handler_mutex);
+        m_exception_handler = std::move(handler);
+    }
+
+    /// \brief Subscribe an owner to a concrete event type.
+    /// \tparam EventType Concrete event type to receive.
+    /// \tparam Callback Callback type invocable with `const EventType&`.
+    /// \param owner Non-owning owner key used for grouped unsubscription.
+    /// \param callback Callback invoked when EventType is dispatched.
+    /// \return Subscription id that can be used for targeted unsubscription.
+    template <typename EventType,
+              typename Callback,
+              typename std::enable_if<
+                  std::is_invocable_v<Callback&, const EventType&>,
+                  int>::type = 0>
+    SubscriptionId subscribe(void* owner, Callback&& callback) {
+        static_assert(!std::is_reference<EventType>::value,
+                      "EventType must not be a reference");
+
+        std::function<void(const EventType&)> typed_callback(
+            std::forward<Callback>(callback));
+
+        const auto id = next_subscription_id();
+
+        CallbackRecord record;
+        record.id = id;
+        record.owner = owner;
+        record.callback = [callback = std::move(typed_callback)](
+                              const void* event) {
+            callback(*static_cast<const EventType*>(event));
+        };
+
+        std::lock_guard<std::mutex> lock(m_subscriptions_mutex);
+        m_callbacks[std::type_index(typeid(EventType))].push_back(
+            std::move(record));
+        return id;
+    }
+
+    /// \brief Subscribe with a lifetime guard checked before callback start.
+    /// \tparam EventType Concrete event type to receive.
+    /// \tparam Guard Type stored by the weak lifetime guard.
+    /// \tparam Callback Callback type invocable with `const EventType&`.
+    /// \param owner Non-owning owner key used for grouped unsubscription.
+    /// \param guard Weak guard that must lock before callback invocation.
+    /// \param callback Callback invoked when EventType is dispatched.
+    /// \return Subscription id that can be used for targeted unsubscription.
+    ///
+    /// When dispatch reaches this subscription, the guard is locked and the
+    /// resulting shared owner is held until the callback returns. Expired
+    /// guards skip the callback.
+    template <typename EventType,
+              typename Guard,
+              typename Callback,
+              typename std::enable_if<
+                  std::is_invocable_v<Callback&, const EventType&>,
+                  int>::type = 0>
+    SubscriptionId subscribe(void* owner,
+                             std::weak_ptr<Guard> guard,
+                             Callback&& callback) {
+        static_assert(!std::is_reference<EventType>::value,
+                      "EventType must not be a reference");
+
+        std::function<void(const EventType&)> typed_callback(
+            std::forward<Callback>(callback));
+
+        const auto id = next_subscription_id();
+
+        CallbackRecord record;
+        record.id = id;
+        record.owner = owner;
+        record.has_guard = true;
+        record.guard = std::weak_ptr<void>(guard);
+        record.callback = [callback = std::move(typed_callback)](
+                              const void* event) {
+            callback(*static_cast<const EventType*>(event));
+        };
+
+        std::lock_guard<std::mutex> lock(m_subscriptions_mutex);
+        m_callbacks[std::type_index(typeid(EventType))].push_back(
+            std::move(record));
+        return id;
+    }
+
+    /// \brief Subscribe a generic EventListener to an Event-derived type.
+    /// \tparam EventType Event type derived from event_hub::Event.
+    /// \param owner Non-owning owner key used for grouped unsubscription.
+    /// \param listener Listener whose on_event() method is invoked.
+    /// \return Subscription id that can be used for targeted unsubscription.
+    template <typename EventType>
+    SubscriptionId subscribe(void* owner, EventListener& listener) {
+        static_assert(std::is_base_of<Event, EventType>::value,
+                      "EventType must derive from event_hub::Event");
+
+        return subscribe<EventType>(owner, [&listener](const EventType& event) {
+            listener.on_event(event);
+        });
+    }
+
+    /// \brief Subscribe a generic EventListener with a lifetime guard.
+    /// \tparam EventType Event type derived from event_hub::Event.
+    /// \tparam Guard Type stored by the weak lifetime guard.
+    /// \param owner Non-owning owner key used for grouped unsubscription.
+    /// \param guard Weak guard that must lock before listener invocation.
+    /// \param listener Listener whose on_event() method is invoked.
+    /// \return Subscription id that can be used for targeted unsubscription.
+    template <typename EventType, typename Guard>
+    SubscriptionId subscribe(void* owner,
+                             std::weak_ptr<Guard> guard,
+                             EventListener& listener) {
+        static_assert(std::is_base_of<Event, EventType>::value,
+                      "EventType must derive from event_hub::Event");
+
+        return subscribe<EventType>(
+            owner,
+            std::move(guard),
+            [&listener](const EventType& event) {
+                listener.on_event(event);
+            });
+    }
+
+    /// \brief Remove one subscription by id.
+    /// \param id Subscription id returned by subscribe().
+    ///
+    /// Removing a subscription prevents future dispatch records from being
+    /// copied, but does not wait for callbacks already copied by an active
+    /// dispatch.
+    void unsubscribe(SubscriptionId id) {
+        std::lock_guard<std::mutex> lock(m_subscriptions_mutex);
+        for (auto it = m_callbacks.begin(); it != m_callbacks.end();) {
+            auto& callbacks = it->second;
+            callbacks.erase(std::remove_if(callbacks.begin(), callbacks.end(),
+                                           [id](const CallbackRecord& record) {
+                                               return record.id == id;
+                                           }),
+                            callbacks.end());
+            if (callbacks.empty()) {
+                it = m_callbacks.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    /// \brief Remove all subscriptions for an owner and concrete event type.
+    /// \tparam EventType Concrete event type to unsubscribe.
+    /// \param owner Non-owning owner key used when the subscriptions were
+    /// created.
+    template <typename EventType>
+    void unsubscribe_all(void* owner) {
+        std::lock_guard<std::mutex> lock(m_subscriptions_mutex);
+        auto it = m_callbacks.find(std::type_index(typeid(EventType)));
+        if (it == m_callbacks.end()) {
+            return;
+        }
+
+        auto& callbacks = it->second;
+        callbacks.erase(std::remove_if(callbacks.begin(), callbacks.end(),
+                                       [owner](const CallbackRecord& record) {
+                                           return record.owner == owner;
+                                       }),
+                        callbacks.end());
+        if (callbacks.empty()) {
+            m_callbacks.erase(it);
+        }
+    }
+
+    /// \brief Remove all subscriptions owned by an owner.
+    /// \param owner Non-owning owner key used when the subscriptions were
+    /// created.
+    ///
+    /// This removes future records from the bus storage, but it does not stop
+    /// or wait for callbacks that already started or already passed their guard
+    /// check.
+    void unsubscribe_all(void* owner) {
+        std::lock_guard<std::mutex> lock(m_subscriptions_mutex);
+        for (auto it = m_callbacks.begin(); it != m_callbacks.end();) {
+            auto& callbacks = it->second;
+            callbacks.erase(std::remove_if(callbacks.begin(), callbacks.end(),
+                                           [owner](const CallbackRecord& record) {
+                                               return record.owner == owner;
+                                           }),
+                            callbacks.end());
+            if (callbacks.empty()) {
+                it = m_callbacks.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    /// \brief Dispatch an already constructed event synchronously.
+    /// \tparam EventType Concrete event type to dispatch.
+    /// \param event Event object to dispatch.
+    /// \throws Any callback exception when no exception handler is configured.
+    template <typename EventType>
+    void emit(const EventType& event) const {
+        dispatch(std::type_index(typeid(EventType)), &event);
+        poll_awaiters();
+    }
+
+    /// \brief Construct and dispatch an event synchronously.
+    /// \tparam EventType Concrete event type to construct and dispatch.
+    /// \tparam Args Constructor argument types.
+    /// \param args Arguments used to construct the event.
+    /// \throws Any callback exception when no exception handler is configured.
+    template <typename EventType,
+              typename... Args,
+              typename std::enable_if<
+                  !detail::IsSingleEventArgument<EventType, Args...>::value,
+                  int>::type = 0>
+    void emit(Args&&... args) const {
+        EventType event{std::forward<Args>(args)...};
+        dispatch(std::type_index(typeid(EventType)), &event);
+        poll_awaiters();
+    }
+
+    /// \brief Queue an already constructed event for later processing.
+    /// \tparam EventType Concrete event type to queue.
+    /// \param event Event object to copy into the queue.
+    template <typename EventType>
+    void post(const EventType& event) {
+        enqueue<EventType>(std::make_shared<EventType>(event));
+    }
+
+    /// \brief Queue an already constructed event for later processing.
+    /// \tparam EventType Concrete event type to queue.
+    /// \param event Event object to move into the queue.
+    template <typename EventType>
+    void post(EventType&& event) {
+        enqueue<EventType>(std::make_shared<EventType>(std::move(event)));
+    }
+
+    /// \brief Construct and queue an event for later processing.
+    /// \tparam EventType Concrete event type to construct and queue.
+    /// \tparam Args Constructor argument types.
+    /// \param args Arguments used to construct the queued event.
+    template <typename EventType,
+              typename... Args,
+              typename std::enable_if<
+                  !detail::IsSingleEventArgument<EventType, Args...>::value,
+                  int>::type = 0>
+    void post(Args&&... args) {
+        enqueue<EventType>(
+            std::make_shared<EventType>(EventType{std::forward<Args>(args)...}));
+    }
+
+    /// \brief Drain queued events captured at the start of the call.
+    /// \details Events posted during process() are processed by a later call.
+    /// If an unhandled callback exception stops processing, events not yet
+    /// dispatched from the captured snapshot are restored for a later
+    /// process() call.
+    /// \return Number of events dispatched.
+    /// \throws Any callback exception when no exception handler is configured.
+    std::size_t process() {
+        std::queue<QueuedEvent> local_queue;
+        {
+            std::lock_guard<std::mutex> lock(m_queue_mutex);
+            std::swap(local_queue, m_event_queue);
+        }
+
+        std::size_t processed = 0;
+        while (!local_queue.empty()) {
+            const auto& queued = local_queue.front();
+            try {
+                dispatch(queued.type, queued.payload.get());
+                local_queue.pop();
+            } catch (...) {
+                local_queue.pop();
+                restore_unprocessed_events(local_queue);
+                throw;
+            }
+            ++processed;
+        }
+
+        poll_awaiters();
+        return processed;
+    }
+
+    /// \brief Return the current queued event count.
+    /// \return Number of events waiting in the async queue.
+    std::size_t pending_count() const {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        return m_event_queue.size();
+    }
+
+    /// \brief Return true when the async queue is not empty.
+    /// \return True when one or more queued events are pending.
+    bool has_pending() const {
+        return pending_count() != 0U;
+    }
+
+    /// \brief Drop queued events without dispatching them.
+    ///
+    /// This clears only the async queue. Subscriptions and awaiters are left
+    /// unchanged.
+    void clear_pending() {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        std::queue<QueuedEvent> empty;
+        std::swap(m_event_queue, empty);
+    }
+
+    /// \brief Drop queued events without dispatching them.
+    /// \note Compatibility wrapper; prefer clear_pending() for clarity.
+    void clear() {
+        clear_pending();
+    }
+
+    /// \brief Register an awaiter for timeout and cancellation polling.
+    /// \param awaiter Awaiter implementation to poll after emit() and
+    /// process(). Null pointers are ignored.
+    void register_awaiter(const std::shared_ptr<IAwaiterEx>& awaiter) {
+        if (!awaiter) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(m_awaiters_mutex);
+        m_awaiters.emplace_back(awaiter);
+    }
+
+private:
+    struct CallbackRecord {
+        SubscriptionId id = 0;
+        void* owner = nullptr;
+        bool has_guard = false;
+        std::weak_ptr<void> guard;
+        std::function<void(const void*)> callback;
+    };
+
+    struct QueuedEvent {
+        std::type_index type;
+        std::shared_ptr<const void> payload;
+    };
+
+    template <typename EventType>
+    void enqueue(std::shared_ptr<EventType> event) {
+        std::shared_ptr<const void> payload = std::move(event);
+        {
+            std::lock_guard<std::mutex> lock(m_queue_mutex);
+            m_event_queue.push(QueuedEvent{std::type_index(typeid(EventType)),
+                                           std::move(payload)});
+        }
+
+        notify_work_available();
+    }
+
+    void notify_work_available() noexcept {
+        auto* notifier = m_notifier.load(std::memory_order_acquire);
+        if (notifier) {
+            notifier->notify();
+        }
+    }
+
+    void restore_unprocessed_events(std::queue<QueuedEvent>& remaining) {
+        if (remaining.empty()) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        if (m_event_queue.empty()) {
+            std::swap(m_event_queue, remaining);
+            return;
+        }
+
+        std::queue<QueuedEvent> restored;
+        while (!remaining.empty()) {
+            restored.push(std::move(remaining.front()));
+            remaining.pop();
+        }
+        while (!m_event_queue.empty()) {
+            restored.push(std::move(m_event_queue.front()));
+            m_event_queue.pop();
+        }
+        std::swap(m_event_queue, restored);
+    }
+
+    void dispatch(std::type_index type, const void* event) const {
+        std::vector<CallbackRecord> callbacks;
+        {
+            std::lock_guard<std::mutex> lock(m_subscriptions_mutex);
+            auto it = m_callbacks.find(type);
+            if (it != m_callbacks.end()) {
+                callbacks = it->second;
+            }
+        }
+
+        for (const auto& record : callbacks) {
+            std::shared_ptr<void> alive;
+            if (record.has_guard) {
+                alive = record.guard.lock();
+                if (!alive) {
+                    continue;
+                }
+            }
+
+            if (record.callback) {
+                try {
+                    record.callback(event);
+                } catch (...) {
+                    if (!report_exception(std::current_exception())) {
+                        throw;
+                    }
+                }
+            }
+        }
+    }
+
+    SubscriptionId next_subscription_id() {
+        return m_next_subscription_id.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    ExceptionHandler exception_handler() const {
+        std::lock_guard<std::mutex> lock(m_exception_handler_mutex);
+        return m_exception_handler;
+    }
+
+    bool report_exception(std::exception_ptr exception) const {
+        auto handler = exception_handler();
+        if (!handler) {
+            return false;
+        }
+
+        handler(std::move(exception));
+        return true;
+    }
+
+    void report_exception_noexcept(std::exception_ptr exception) const noexcept {
+        try {
+            (void)report_exception(std::move(exception));
+        } catch (...) {
+        }
+    }
+
+    void poll_awaiters() const {
+        std::vector<std::shared_ptr<IAwaiterEx>> live;
+        {
+            std::lock_guard<std::mutex> lock(m_awaiters_mutex);
+            m_awaiters.erase(
+                std::remove_if(m_awaiters.begin(), m_awaiters.end(),
+                               [](const std::weak_ptr<IAwaiterEx>& weak) {
+                                   auto awaiter = weak.lock();
+                                   return !awaiter || !awaiter->is_active();
+                               }),
+                m_awaiters.end());
+
+            live.reserve(m_awaiters.size());
+            for (const auto& weak : m_awaiters) {
+                if (auto awaiter = weak.lock()) {
+                    live.emplace_back(std::move(awaiter));
+                }
+            }
+        }
+
+        for (auto& awaiter : live) {
+            awaiter->poll_timeout();
+        }
+    }
+
+private:
+    template <typename EventType>
+    friend class EventAwaiter;
+
+    mutable std::mutex m_subscriptions_mutex;
+    std::unordered_map<std::type_index, std::vector<CallbackRecord>> m_callbacks;
+
+    mutable std::mutex m_queue_mutex;
+    std::queue<QueuedEvent> m_event_queue;
+
+    mutable std::mutex m_awaiters_mutex;
+    mutable std::vector<std::weak_ptr<IAwaiterEx>> m_awaiters;
+
+    mutable std::mutex m_exception_handler_mutex;
+    ExceptionHandler m_exception_handler;
+
+    std::atomic<SubscriptionId> m_next_subscription_id{1};
+    std::atomic<INotifier*> m_notifier{nullptr};
+};
+
+} // namespace event_hub
+
+#endif // EVENT_HUB_EVENT_BUS_HPP_INCLUDED

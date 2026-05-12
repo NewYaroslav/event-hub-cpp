@@ -9,7 +9,8 @@ modular applications.
 2. `agents/codebase-orientation.md` for the library model and layout.
 3. `agents/task-manager-and-run-loop.md` for task scheduling or event-loop
    work.
-4. The task-specific playbook for C++, headers, dependencies, build/test, or
+4. `agents/modules-and-module-hub.md` for module orchestration work.
+5. The task-specific playbook for C++, headers, dependencies, build/test, or
    commits.
 
 ## Project Rules
@@ -40,3 +41,6 @@ state that in the task result.
 `temp/agents/` and `temp/pubsub/` are reference inputs for this repository.
 Do not treat them as the canonical source after the adapted files exist under
 `agents/` and `include/event_hub/`.
+`temp/deep-research-report.md` and `temp/BaseTradingPlatform.hpp` may explain
+the module-layer motivation, but `agents/modules-and-module-hub.md` is the
+canonical instruction file for current module architecture.

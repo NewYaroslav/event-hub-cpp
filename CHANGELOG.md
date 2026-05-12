@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+- Added `Module` and `ModuleHub` for composing applications from modules that
+  share one `EventBus` while each module owns its own `TaskManager`.
+- Added module execution modes for inline hub processing, private module
+  worker threads, and externally processed manual task queues.
+- Added passive `ModuleHub` integration APIs, including `process()`,
+  `process_once()`, `has_pending()`, `next_deadline()`, notifier wiring, and
+  cooperative stop handling, plus active `run()`, `start()`, and `join()`
+  wrappers.
+- Added module-focused examples for blocking hub execution, background hub
+  execution, and embedding a hub into an existing external loop.
+- Added module behavior tests for lifecycle order, per-module task queues,
+  inline fairness, manual queues, private workers, notifier wiring, deadlines,
+  active-loop lifecycle, validation, initialization cleanup, and exception
+  propagation.
+- Documented the module architecture and design rationale for AI agents under
+  `agents/modules-and-module-hub.md`.
+- Fixed a `ModuleHub::start()` race where an early `request_stop()` could be
+  cleared by background initialization.
+
 ## [v0.1.0] - 2026-05-12
 - Added the initial header-only C++17 event bus API with typed subscriptions,
   synchronous `emit<T>()`, queued `post<T>()`, explicit `process()`, pending

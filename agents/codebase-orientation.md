@@ -39,6 +39,10 @@ Core vocabulary:
   tasks processed by an application thread.
 - `RunLoop` - optional blocking helper that processes any number of registered
   `EventBus` and `TaskManager` instances on the calling thread.
+- `Module` - `EventNode` plus an owned `TaskManager` and explicit
+  initialize/process/shutdown lifecycle.
+- `ModuleHub` - owner of one shared `EventBus` and a collection of modules;
+  it is a passive work source with optional `run()` and `start()` wrappers.
 
 ## Event Model
 
@@ -242,6 +246,20 @@ blocking current-thread loop. It owns one `SyncNotifier`, registers it on added
 sources, processes all registered buses and task managers, and blocks until
 `request_stop()` or a user predicate ends the loop. Registered sources are
 non-owning and must outlive the loop.
+
+## Module Layer
+
+Use `Module` and `ModuleHub` when an application should be composed from
+independent components sharing one typed bus. Each module owns its own
+`TaskManager`; the hub owns the shared `EventBus` and module collection.
+
+`ModuleHub` must remain a passive source of work. `process()`, `has_pending()`,
+`next_deadline()`, and notifier wiring are first-class APIs for embedding into
+external loops. `run()` and `start()` are convenience wrappers over the same
+processing model.
+
+For module-layer changes, read `agents/modules-and-module-hub.md` before
+editing public APIs, examples, or tests.
 
 ## Threading Model
 

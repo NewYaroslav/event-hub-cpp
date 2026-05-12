@@ -21,3 +21,4 @@ endif()
 
 enable_testing()
 add_test(NAME event_hub_install_consumer COMMAND event_hub_install_consumer)
+set_tests_properties(event_hub_install_consumer PROPERTIES TIMEOUT 15)

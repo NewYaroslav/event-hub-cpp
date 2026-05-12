@@ -23,7 +23,7 @@ All notable changes to this project will be documented in this file.
 - Added focused examples for basic events, event/listener usage, `EventNode`,
   awaiters and cancellation, exception handling, strict lifetime guards,
   external notifiers, task queues, task/event-bus integration, and `RunLoop`.
-- Added smoke coverage for event dispatch, lifetime guards, awaiters,
+- Added focused behavior coverage for event dispatch, lifetime guards, awaiters,
   cancellation, task management, notifier behavior, run-loop processing, and
   exception policies.
 - Added CMake interface target `event_hub::event_hub`, install/export metadata,

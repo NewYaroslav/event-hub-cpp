@@ -16,6 +16,10 @@ endif()
 
 option(EVENT_HUB_CPP_BUILD_EXAMPLES "Build event-hub-cpp examples" ${EVENT_HUB_CPP_TOP_LEVEL})
 option(EVENT_HUB_CPP_BUILD_TESTS "Build event-hub-cpp tests" ${EVENT_HUB_CPP_TOP_LEVEL})
+set(EVENT_HUB_CPP_TEST_TIMEOUT_SECONDS
+    15
+    CACHE STRING "Per-test timeout for event-hub-cpp CTest tests"
+)
 
 add_library(event_hub_cpp INTERFACE)
 add_library(event_hub::event_hub ALIAS event_hub_cpp)
@@ -72,6 +76,9 @@ if(EVENT_HUB_CPP_BUILD_TESTS)
         set(test_target event_hub_${test_name})
         event_hub_cpp_add_executable(${test_target} ${test_source})
         add_test(NAME ${test_target} COMMAND ${test_target})
+        set_tests_properties(${test_target}
+            PROPERTIES TIMEOUT ${EVENT_HUB_CPP_TEST_TIMEOUT_SECONDS}
+        )
     endforeach()
 endif()
 

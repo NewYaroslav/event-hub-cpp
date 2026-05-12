@@ -9,7 +9,7 @@ task queues, event-loop helpers, and cancellation primitives.
 - `include/event_hub/` contains public headers.
 - `examples/` contains small focused usage examples. Add new examples to
   CMake so top-level builds compile them.
-- `tests/` contains smoke and behavior tests.
+- `tests/` contains focused behavior tests.
 - `agents/` contains repository instructions for AI agents.
 - `temp/` is reference material supplied during project bootstrapping.
 

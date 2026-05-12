@@ -309,7 +309,7 @@ ctest --test-dir build --output-on-failure
 - `event_hub_task_manager` из `examples/task_manager.cpp`;
 - `event_hub_task_manager_with_bus` из `examples/task_manager_with_bus.cpp`;
 - `event_hub_run_loop` из `examples/run_loop.cpp`;
-- `event_hub_smoke` из `tests/smoke.cpp`.
+- `event_hub_test_*` поведенческие тесты из `tests/test_*.cpp`.
 
 ## Проверенные Платформы
 

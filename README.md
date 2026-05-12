@@ -345,7 +345,7 @@ The top-level build creates:
 - `event_hub_task_manager` from `examples/task_manager.cpp`;
 - `event_hub_task_manager_with_bus` from `examples/task_manager_with_bus.cpp`;
 - `event_hub_run_loop` from `examples/run_loop.cpp`;
-- `event_hub_smoke` from `tests/smoke.cpp`.
+- `event_hub_test_*` behavior tests from `tests/test_*.cpp`.
 
 ## Tested Platforms
 

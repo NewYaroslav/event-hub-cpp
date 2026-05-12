@@ -1,6 +1,5 @@
 #include "test_helpers.hpp"
 
-#include <cassert>
 #include <atomic>
 #include <thread>
 #include <vector>
@@ -19,11 +18,11 @@ int main() {
             });
 
             endpoint.emit<Ping>(2);
-            assert(sync_total == 2);
+            EVENT_HUB_TEST_CHECK(sync_total == 2);
         }
 
         bus.emit<Ping>(3);
-        assert(sync_total == 2);
+        EVENT_HUB_TEST_CHECK(sync_total == 2);
     }
 
     {
@@ -43,8 +42,8 @@ int main() {
         endpoint.emit<Ping>(1);
         endpoint.emit<Message>("still subscribed");
 
-        assert(ping_calls == 0);
-        assert(message_calls == 1);
+        EVENT_HUB_TEST_CHECK(ping_calls == 0);
+        EVENT_HUB_TEST_CHECK(message_calls == 1);
     }
 
     {
@@ -58,7 +57,7 @@ int main() {
 
         endpoint.unsubscribe(id);
         endpoint.emit<Ping>(1);
-        assert(calls == 0);
+        EVENT_HUB_TEST_CHECK(calls == 0);
 
         endpoint.subscribe<Ping>([&calls](const Ping&) {
             ++calls;
@@ -70,7 +69,7 @@ int main() {
         endpoint.unsubscribe_all();
         endpoint.emit<Ping>(1);
         endpoint.emit<Message>("ignored");
-        assert(calls == 0);
+        EVENT_HUB_TEST_CHECK(calls == 0);
     }
 
     {
@@ -83,18 +82,18 @@ int main() {
         });
 
         bus.emit<Ping>(3);
-        assert(total == 3);
+        EVENT_HUB_TEST_CHECK(total == 3);
 
         bus.unsubscribe(id);
         bus.emit<Ping>(4);
-        assert(total == 3);
+        EVENT_HUB_TEST_CHECK(total == 3);
 
         bus.subscribe<Ping>(&owner, [&total](const Ping& ping) {
             total += ping.value;
         });
         bus.unsubscribe_all(&owner);
         bus.emit<Ping>(5);
-        assert(total == 3);
+        EVENT_HUB_TEST_CHECK(total == 3);
     }
 
     {
@@ -109,7 +108,7 @@ int main() {
 
         MoveOnly event(11);
         endpoint.emit<MoveOnly>(event);
-        assert(move_only_total == 11);
+        EVENT_HUB_TEST_CHECK(move_only_total == 11);
     }
 
     {
@@ -124,10 +123,10 @@ int main() {
         endpoint.post<Ping>(4);
         endpoint.post<Ping>(6);
 
-        assert(bus.pending_count() == 2);
-        assert(bus.process() == 2);
-        assert(async_total == 10);
-        assert(!bus.has_pending());
+        EVENT_HUB_TEST_CHECK(bus.pending_count() == 2);
+        EVENT_HUB_TEST_CHECK(bus.process() == 2);
+        EVENT_HUB_TEST_CHECK(async_total == 10);
+        EVENT_HUB_TEST_CHECK(!bus.has_pending());
     }
 
     {
@@ -147,8 +146,8 @@ int main() {
 
         endpoint.post<Message>("aggregate");
 
-        assert(bus.process() == 3);
-        assert((messages == std::vector<std::string>{"copy", "move", "aggregate"}));
+        EVENT_HUB_TEST_CHECK(bus.process() == 3);
+        EVENT_HUB_TEST_CHECK((messages == std::vector<std::string>{"copy", "move", "aggregate"}));
     }
 
     {
@@ -165,12 +164,12 @@ int main() {
 
         endpoint.post<Ping>(1);
 
-        assert(bus.process() == 1);
-        assert((seen == std::vector<int>{1}));
-        assert(bus.pending_count() == 1);
+        EVENT_HUB_TEST_CHECK(bus.process() == 1);
+        EVENT_HUB_TEST_CHECK((seen == std::vector<int>{1}));
+        EVENT_HUB_TEST_CHECK(bus.pending_count() == 1);
 
-        assert(bus.process() == 1);
-        assert((seen == std::vector<int>{1, 2}));
+        EVENT_HUB_TEST_CHECK(bus.process() == 1);
+        EVENT_HUB_TEST_CHECK((seen == std::vector<int>{1, 2}));
     }
 
     {
@@ -184,18 +183,18 @@ int main() {
 
         endpoint.post<Ping>(1);
         endpoint.post<Ping>(2);
-        assert(bus.pending_count() == 2);
+        EVENT_HUB_TEST_CHECK(bus.pending_count() == 2);
 
         bus.clear_pending();
-        assert(!bus.has_pending());
-        assert(bus.process() == 0);
-        assert(calls == 0);
+        EVENT_HUB_TEST_CHECK(!bus.has_pending());
+        EVENT_HUB_TEST_CHECK(bus.process() == 0);
+        EVENT_HUB_TEST_CHECK(calls == 0);
 
         endpoint.post<Ping>(3);
         bus.clear();
-        assert(!bus.has_pending());
-        assert(bus.process() == 0);
-        assert(calls == 0);
+        EVENT_HUB_TEST_CHECK(!bus.has_pending());
+        EVENT_HUB_TEST_CHECK(bus.process() == 0);
+        EVENT_HUB_TEST_CHECK(calls == 0);
     }
 
     {
@@ -212,8 +211,8 @@ int main() {
         });
 
         producer.join();
-        assert(bus.process() == 1);
-        assert(total.load(std::memory_order_relaxed) == 7);
+        EVENT_HUB_TEST_CHECK(bus.process() == 1);
+        EVENT_HUB_TEST_CHECK(total.load(std::memory_order_relaxed) == 7);
     }
 
     return 0;

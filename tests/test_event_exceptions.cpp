@@ -1,6 +1,5 @@
 #include "test_helpers.hpp"
 
-#include <cassert>
 #include <stdexcept>
 #include <vector>
 
@@ -26,8 +25,8 @@ int main() {
             threw = true;
         }
 
-        assert(threw);
-        assert(callback_total == 0);
+        EVENT_HUB_TEST_CHECK(threw);
+        EVENT_HUB_TEST_CHECK(callback_total == 0);
     }
 
     {
@@ -56,9 +55,9 @@ int main() {
         endpoint.post<Ping>(1);
         endpoint.post<Ping>(2);
 
-        assert(bus.process() == 2);
-        assert(exception_count == 2);
-        assert(callback_total == 3);
+        EVENT_HUB_TEST_CHECK(bus.process() == 2);
+        EVENT_HUB_TEST_CHECK(exception_count == 2);
+        EVENT_HUB_TEST_CHECK(callback_total == 3);
     }
 
     {
@@ -85,11 +84,11 @@ int main() {
             threw = true;
         }
 
-        assert(threw);
-        assert(bus.pending_count() == 3);
+        EVENT_HUB_TEST_CHECK(threw);
+        EVENT_HUB_TEST_CHECK(bus.pending_count() == 3);
 
-        assert(bus.process() == 3);
-        assert((seen == std::vector<int>{2, 3, 4}));
+        EVENT_HUB_TEST_CHECK(bus.process() == 3);
+        EVENT_HUB_TEST_CHECK((seen == std::vector<int>{2, 3, 4}));
     }
 
     return 0;

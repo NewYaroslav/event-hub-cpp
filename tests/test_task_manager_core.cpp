@@ -1,6 +1,5 @@
 #include "test_helpers.hpp"
 
-#include <cassert>
 #include <chrono>
 #include <functional>
 #include <future>
@@ -21,7 +20,7 @@ int main() {
             threw = true;
         }
 
-        assert(threw);
+        EVENT_HUB_TEST_CHECK(threw);
     }
 
     {
@@ -30,12 +29,12 @@ int main() {
             ++calls;
         });
 
-        assert(task);
+        EVENT_HUB_TEST_CHECK(task);
         task();
-        assert(calls == 1);
+        EVENT_HUB_TEST_CHECK(calls == 1);
 
         task.reset();
-        assert(!task);
+        EVENT_HUB_TEST_CHECK(!task);
     }
 
     {
@@ -43,20 +42,20 @@ int main() {
         int value = 0;
         std::function<void()> empty_function;
 
-        assert(tasks.post(empty_function) == 0);
+        EVENT_HUB_TEST_CHECK(tasks.post(empty_function) == 0);
 
         const auto id = tasks.post([&value] {
             ++value;
         });
 
-        assert(id != 0);
-        assert(tasks.ready_count() == 1);
-        assert(tasks.pending_count() == 1);
-        assert(tasks.process() == 1);
-        assert(value == 1);
-        assert(!tasks.has_ready());
-        assert(!tasks.has_pending());
-        assert(tasks.process() == 0);
+        EVENT_HUB_TEST_CHECK(id != 0);
+        EVENT_HUB_TEST_CHECK(tasks.ready_count() == 1);
+        EVENT_HUB_TEST_CHECK(tasks.pending_count() == 1);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(value == 1);
+        EVENT_HUB_TEST_CHECK(!tasks.has_ready());
+        EVENT_HUB_TEST_CHECK(!tasks.has_pending());
+        EVENT_HUB_TEST_CHECK(tasks.process() == 0);
     }
 
     {
@@ -69,10 +68,10 @@ int main() {
             });
         });
 
-        assert(tasks.process() == 1);
-        assert(value == 0);
-        assert(tasks.process() == 1);
-        assert(value == 1);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(value == 0);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(value == 1);
     }
 
     {
@@ -83,13 +82,13 @@ int main() {
         tasks.post([&order] { order.push_back(2); });
         tasks.post([&order] { order.push_back(3); });
 
-        assert(tasks.process(2) == 2);
-        assert((order == std::vector<int>{1, 2}));
-        assert(tasks.pending_count() == 1);
-        assert(tasks.ready_count() == 1);
+        EVENT_HUB_TEST_CHECK(tasks.process(2) == 2);
+        EVENT_HUB_TEST_CHECK((order == std::vector<int>{1, 2}));
+        EVENT_HUB_TEST_CHECK(tasks.pending_count() == 1);
+        EVENT_HUB_TEST_CHECK(tasks.ready_count() == 1);
 
-        assert(tasks.process(2) == 1);
-        assert((order == std::vector<int>{1, 2, 3}));
+        EVENT_HUB_TEST_CHECK(tasks.process(2) == 1);
+        EVENT_HUB_TEST_CHECK((order == std::vector<int>{1, 2, 3}));
     }
 
     {
@@ -107,8 +106,8 @@ int main() {
         tasks.post([&order] { order.push_back(1); },
                    {event_hub::TaskPriority::high});
 
-        assert(tasks.process() == 5);
-        assert((order == std::vector<int>{0, 1, 2, 3, 4}));
+        EVENT_HUB_TEST_CHECK(tasks.process() == 5);
+        EVENT_HUB_TEST_CHECK((order == std::vector<int>{0, 1, 2, 3, 4}));
     }
 
     {
@@ -120,14 +119,14 @@ int main() {
             [&value] {
                 ++value;
             });
-        assert(id != 0);
+        EVENT_HUB_TEST_CHECK(id != 0);
 
-        assert(tasks.process() == 0);
-        assert(value == 0);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 0);
+        EVENT_HUB_TEST_CHECK(value == 0);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(40));
-        assert(tasks.process() == 1);
-        assert(value == 1);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(value == 1);
     }
 
     {
@@ -151,12 +150,12 @@ int main() {
                 value += 4;
             }));
 
-        assert(id1 != 0);
-        assert(id2 != 0);
-        assert(id3 != 0);
-        assert(tasks.ready_count() == 3);
-        assert(tasks.process() == 3);
-        assert(value == 7);
+        EVENT_HUB_TEST_CHECK(id1 != 0);
+        EVENT_HUB_TEST_CHECK(id2 != 0);
+        EVENT_HUB_TEST_CHECK(id3 != 0);
+        EVENT_HUB_TEST_CHECK(tasks.ready_count() == 3);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 3);
+        EVENT_HUB_TEST_CHECK(value == 7);
     }
 
     {
@@ -167,11 +166,11 @@ int main() {
             ++value;
         });
 
-        assert(tasks.cancel(id));
-        assert(!tasks.cancel(id));
-        assert(!tasks.cancel(999999));
-        assert(tasks.process() == 0);
-        assert(value == 0);
+        EVENT_HUB_TEST_CHECK(tasks.cancel(id));
+        EVENT_HUB_TEST_CHECK(!tasks.cancel(id));
+        EVENT_HUB_TEST_CHECK(!tasks.cancel(999999));
+        EVENT_HUB_TEST_CHECK(tasks.process() == 0);
+        EVENT_HUB_TEST_CHECK(value == 0);
     }
 
     {
@@ -187,11 +186,11 @@ int main() {
         });
 
         std::thread worker([&tasks] {
-            assert(tasks.process() == 1);
+            EVENT_HUB_TEST_CHECK(tasks.process() == 1);
         });
 
-        assert_ready(entered);
-        assert(!tasks.cancel(id));
+        require_ready(entered);
+        EVENT_HUB_TEST_CHECK(!tasks.cancel(id));
         release_promise.set_value();
         worker.join();
     }
@@ -207,8 +206,8 @@ int main() {
         });
 
         producer.join();
-        assert(tasks.process() == 1);
-        assert(value == 5);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(value == 5);
     }
 
     {
@@ -218,11 +217,11 @@ int main() {
         const auto queued = tasks.post([&value] {
             ++value;
         });
-        assert(queued != 0);
+        EVENT_HUB_TEST_CHECK(queued != 0);
 
         tasks.close();
-        assert(tasks.is_closed());
-        assert(tasks.post([] {}) == 0);
+        EVENT_HUB_TEST_CHECK(tasks.is_closed());
+        EVENT_HUB_TEST_CHECK(tasks.post([] {}) == 0);
 
         bool submit_threw = false;
         try {
@@ -233,9 +232,9 @@ int main() {
             submit_threw = true;
         }
 
-        assert(submit_threw);
-        assert(tasks.process() == 1);
-        assert(value == 1);
+        EVENT_HUB_TEST_CHECK(submit_threw);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(value == 1);
     }
 
     return 0;

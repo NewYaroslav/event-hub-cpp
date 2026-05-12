@@ -1,6 +1,5 @@
 #include "test_helpers.hpp"
 
-#include <cassert>
 #include <chrono>
 #include <stdexcept>
 #include <thread>
@@ -21,11 +20,11 @@ int main() {
         endpoint.post<Ping>(8);
         endpoint.post<Ping>(9);
 
-        assert(bus.process() == 3);
-        assert(awaited == 8);
+        EVENT_HUB_TEST_CHECK(bus.process() == 3);
+        EVENT_HUB_TEST_CHECK(awaited == 8);
 
         endpoint.emit<Ping>(8);
-        assert(awaited == 8);
+        EVENT_HUB_TEST_CHECK(awaited == 8);
     }
 
     {
@@ -45,7 +44,7 @@ int main() {
         awaiter->cancel();
         endpoint.emit<Ping>(6);
 
-        assert(even_total == 6);
+        EVENT_HUB_TEST_CHECK(even_total == 6);
     }
 
     {
@@ -63,16 +62,16 @@ int main() {
             options);
 
         source.cancel();
-        assert(options.token.is_cancelled());
+        EVENT_HUB_TEST_CHECK(options.token.is_cancelled());
 
         source.reset();
-        assert(!source.token().is_cancelled());
-        assert(options.token.is_cancelled());
+        EVENT_HUB_TEST_CHECK(!source.token().is_cancelled());
+        EVENT_HUB_TEST_CHECK(options.token.is_cancelled());
 
         endpoint.emit<Ping>(1);
 
-        assert(!cancelled_called);
-        assert(!awaiter->is_active());
+        EVENT_HUB_TEST_CHECK(!cancelled_called);
+        EVENT_HUB_TEST_CHECK(!awaiter->is_active());
     }
 
     {
@@ -87,14 +86,14 @@ int main() {
 
         auto awaiter = endpoint.await_once<Message>(
             [](const Message&) {
-                assert(false && "timeout awaiter should not receive messages");
+                EVENT_HUB_TEST_CHECK(false && "timeout awaiter should not receive messages");
             },
             options);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        assert(bus.process() == 0);
-        assert(timed_out);
-        assert(!awaiter->is_active());
+        EVENT_HUB_TEST_CHECK(bus.process() == 0);
+        EVENT_HUB_TEST_CHECK(timed_out);
+        EVENT_HUB_TEST_CHECK(!awaiter->is_active());
     }
 
     {
@@ -109,11 +108,11 @@ int main() {
         endpoint.close();
         endpoint.close();
 
-        assert(endpoint.is_closed());
-        assert(!awaiter->is_active());
+        EVENT_HUB_TEST_CHECK(endpoint.is_closed());
+        EVENT_HUB_TEST_CHECK(!awaiter->is_active());
 
         bus.emit<Ping>(1);
-        assert(calls == 0);
+        EVENT_HUB_TEST_CHECK(calls == 0);
     }
 
     {
@@ -132,8 +131,8 @@ int main() {
         bus.emit<Ping>(5);
         bus.emit<Ping>(6);
 
-        assert(direct_total == 5);
-        assert(!awaiter->is_active());
+        EVENT_HUB_TEST_CHECK(direct_total == 5);
+        EVENT_HUB_TEST_CHECK(!awaiter->is_active());
     }
 
     {
@@ -159,13 +158,13 @@ int main() {
 
         endpoint.await_once<Message>(
             [](const Message&) {
-                assert(false && "timeout awaiter should not receive messages");
+                EVENT_HUB_TEST_CHECK(false && "timeout awaiter should not receive messages");
             },
             options);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
-        assert(bus.process() == 0);
-        assert(exception_count == 1);
+        EVENT_HUB_TEST_CHECK(bus.process() == 0);
+        EVENT_HUB_TEST_CHECK(exception_count == 1);
     }
 
     return 0;

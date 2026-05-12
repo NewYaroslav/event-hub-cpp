@@ -1,6 +1,5 @@
 #include "test_helpers.hpp"
 
-#include <cassert>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -16,7 +15,7 @@ int main() {
         std::vector<std::string> messages;
         std::vector<int> task_values;
 
-        assert(loop.max_tasks_per_manager() == 1);
+        EVENT_HUB_TEST_CHECK(loop.max_tasks_per_manager() == 1);
 
         endpoint.subscribe<Message>([&messages](const Message& message) {
             messages.push_back(message.text);
@@ -35,20 +34,20 @@ int main() {
             task_values.push_back(2);
         });
 
-        assert(loop.process_once() == 2);
-        assert((messages == std::vector<std::string>{"event"}));
-        assert((task_values == std::vector<int>{1}));
+        EVENT_HUB_TEST_CHECK(loop.process_once() == 2);
+        EVENT_HUB_TEST_CHECK((messages == std::vector<std::string>{"event"}));
+        EVENT_HUB_TEST_CHECK((task_values == std::vector<int>{1}));
 
-        assert(loop.process_once() == 1);
-        assert((task_values == std::vector<int>{1, 2}));
+        EVENT_HUB_TEST_CHECK(loop.process_once() == 1);
+        EVENT_HUB_TEST_CHECK((task_values == std::vector<int>{1, 2}));
 
         const auto generation = loop.notifier().generation();
         loop.reset_sources();
         endpoint.post<Message>("manual");
-        assert(!loop.notifier().wait_for(generation,
+        EVENT_HUB_TEST_CHECK(!loop.notifier().wait_for(generation,
                                          std::chrono::milliseconds(0)));
-        assert(bus.process() == 1);
-        assert((messages == std::vector<std::string>{"event", "manual"}));
+        EVENT_HUB_TEST_CHECK(bus.process() == 1);
+        EVENT_HUB_TEST_CHECK((messages == std::vector<std::string>{"event", "manual"}));
     }
 
     {
@@ -60,13 +59,13 @@ int main() {
             return true;
         });
 
-        assert(predicate_called);
-        assert(!loop.stop_requested());
+        EVENT_HUB_TEST_CHECK(predicate_called);
+        EVENT_HUB_TEST_CHECK(!loop.stop_requested());
 
         loop.request_stop();
-        assert(loop.stop_requested());
+        EVENT_HUB_TEST_CHECK(loop.stop_requested());
         loop.reset_stop();
-        assert(!loop.stop_requested());
+        EVENT_HUB_TEST_CHECK(!loop.stop_requested());
     }
 
     {
@@ -101,8 +100,8 @@ int main() {
             return event_hub::RunLoop::Clock::now() >= deadline;
         });
 
-        assert(loop.stop_requested());
-        assert((messages == std::vector<std::string>{"first", "second"}));
+        EVENT_HUB_TEST_CHECK(loop.stop_requested());
+        EVENT_HUB_TEST_CHECK((messages == std::vector<std::string>{"first", "second"}));
     }
 
     return 0;

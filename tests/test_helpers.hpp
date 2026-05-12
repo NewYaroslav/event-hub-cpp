@@ -2,20 +2,41 @@
 
 #include <event_hub.hpp>
 
-#include <cassert>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
+#include <iostream>
 #include <future>
 #include <memory>
 #include <string>
 
 namespace event_hub_test {
 
+[[noreturn]] inline void fail_check(const char* expression,
+                                    const char* file,
+                                    int line) {
+    std::cerr << file << ':' << line << ": check failed: " << expression
+              << std::endl;
+    std::abort();
+}
+
+inline void check(bool condition,
+                  const char* expression,
+                  const char* file,
+                  int line) {
+    if (!condition) {
+        fail_check(expression, file, line);
+    }
+}
+
 template <typename Future>
-void assert_ready(Future& future,
+void require_ready(Future& future,
                   std::chrono::milliseconds timeout =
                       std::chrono::seconds(2)) {
-    assert(future.wait_for(timeout) == std::future_status::ready);
+    check(future.wait_for(timeout) == std::future_status::ready,
+          "future.wait_for(timeout) == std::future_status::ready",
+          __FILE__,
+          __LINE__);
 }
 
 struct Ping {
@@ -138,7 +159,10 @@ public:
 
                 entered.set_value();
                 release.wait();
-                assert(!self->is_destroyed());
+                check(!self->is_destroyed(),
+                      "!self->is_destroyed()",
+                      __FILE__,
+                      __LINE__);
                 self->handle();
             });
     }
@@ -158,3 +182,9 @@ private:
 };
 
 } // namespace event_hub_test
+
+#define EVENT_HUB_TEST_CHECK(condition)                                      \
+    ::event_hub_test::check(static_cast<bool>(condition),                    \
+                            #condition,                                      \
+                            __FILE__,                                        \
+                            __LINE__)

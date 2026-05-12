@@ -1,6 +1,5 @@
 #include "test_helpers.hpp"
 
-#include <cassert>
 #include <chrono>
 #include <future>
 #include <memory>
@@ -26,14 +25,14 @@ int main() {
         });
 
         const auto ids = tasks.post_batch(std::move(batch));
-        assert(ids.size() == 3);
-        assert(ids[0] != 0);
-        assert(ids[1] == 0);
-        assert(ids[2] != 0);
-        assert(notifier.notifications.load(std::memory_order_relaxed) == 1);
+        EVENT_HUB_TEST_CHECK(ids.size() == 3);
+        EVENT_HUB_TEST_CHECK(ids[0] != 0);
+        EVENT_HUB_TEST_CHECK(ids[1] == 0);
+        EVENT_HUB_TEST_CHECK(ids[2] != 0);
+        EVENT_HUB_TEST_CHECK(notifier.notifications.load(std::memory_order_relaxed) == 1);
 
-        assert(tasks.process() == 2);
-        assert(value == 3);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 2);
+        EVENT_HUB_TEST_CHECK(value == 3);
         tasks.reset_notifier();
     }
 
@@ -45,24 +44,24 @@ int main() {
         const auto id = tasks.post([ptr = std::move(owned), &value] {
             value = *ptr;
         });
-        assert(id != 0);
-        assert(tasks.process() == 1);
-        assert(value == 7);
+        EVENT_HUB_TEST_CHECK(id != 0);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(value == 7);
 
         auto future = tasks.submit([] {
             return 42;
         });
-        assert(future.wait_for(std::chrono::milliseconds(0)) ==
+        EVENT_HUB_TEST_CHECK(future.wait_for(std::chrono::milliseconds(0)) ==
                std::future_status::timeout);
-        assert(tasks.process() == 1);
-        assert(future.get() == 42);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(future.get() == 42);
 
         auto void_future = tasks.submit([&value] {
             value = 9;
         });
-        assert(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
         void_future.get();
-        assert(value == 9);
+        EVENT_HUB_TEST_CHECK(value == 9);
     }
 
     {
@@ -88,9 +87,9 @@ int main() {
             value = 5;
         });
 
-        assert(tasks.process() == 2);
-        assert(exception_count == 1);
-        assert(value == 5);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 2);
+        EVENT_HUB_TEST_CHECK(exception_count == 1);
+        EVENT_HUB_TEST_CHECK(value == 5);
     }
 
     {
@@ -118,11 +117,11 @@ int main() {
             threw = true;
         }
 
-        assert(threw);
-        assert(tasks.pending_count() == 3);
-        assert(tasks.ready_count() == 3);
-        assert(tasks.process() == 3);
-        assert((seen == std::vector<int>{1, 2, 3, 4}));
+        EVENT_HUB_TEST_CHECK(threw);
+        EVENT_HUB_TEST_CHECK(tasks.pending_count() == 3);
+        EVENT_HUB_TEST_CHECK(tasks.ready_count() == 3);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 3);
+        EVENT_HUB_TEST_CHECK((seen == std::vector<int>{1, 2, 3, 4}));
     }
 
     {
@@ -132,34 +131,34 @@ int main() {
         const auto generation = notifier.generation();
         const auto id = tasks.post([] {});
 
-        assert(id != 0);
-        assert(notifier.wait_for(generation, std::chrono::milliseconds(0)));
-        assert(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(id != 0);
+        EVENT_HUB_TEST_CHECK(notifier.wait_for(generation, std::chrono::milliseconds(0)));
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
         tasks.reset_notifier();
     }
 
     {
         event_hub::TaskManager tasks;
 
-        assert(tasks.recommend_wait_for(std::chrono::milliseconds(10)) ==
+        EVENT_HUB_TEST_CHECK(tasks.recommend_wait_for(std::chrono::milliseconds(10)) ==
                event_hub::TaskManager::Duration(std::chrono::milliseconds(10)));
-        assert(!tasks.next_deadline());
+        EVENT_HUB_TEST_CHECK(!tasks.next_deadline());
 
         tasks.post_after(std::chrono::milliseconds(30), [] {});
         const auto delayed_wait =
             tasks.recommend_wait_for(std::chrono::milliseconds(100));
 
-        assert(tasks.next_deadline());
-        assert(delayed_wait > event_hub::TaskManager::Duration::zero());
-        assert(delayed_wait <=
+        EVENT_HUB_TEST_CHECK(tasks.next_deadline());
+        EVENT_HUB_TEST_CHECK(delayed_wait > event_hub::TaskManager::Duration::zero());
+        EVENT_HUB_TEST_CHECK(delayed_wait <=
                event_hub::TaskManager::Duration(std::chrono::milliseconds(100)));
 
         tasks.post([] {});
-        assert(tasks.recommend_wait_for(std::chrono::milliseconds(10)) ==
+        EVENT_HUB_TEST_CHECK(tasks.recommend_wait_for(std::chrono::milliseconds(10)) ==
                event_hub::TaskManager::Duration::zero());
 
-        assert(tasks.clear_pending() == 2);
-        assert(!tasks.has_pending());
+        EVENT_HUB_TEST_CHECK(tasks.clear_pending() == 2);
+        EVENT_HUB_TEST_CHECK(!tasks.has_pending());
     }
 
     return 0;

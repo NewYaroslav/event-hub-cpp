@@ -1,6 +1,5 @@
 #include "test_helpers.hpp"
 
-#include <cassert>
 #include <atomic>
 #include <future>
 #include <memory>
@@ -22,8 +21,8 @@ int main() {
         endpoint.close();
         bus.emit<Ping>(1);
 
-        assert(endpoint.is_closed());
-        assert(calls == 0);
+        EVENT_HUB_TEST_CHECK(endpoint.is_closed());
+        EVENT_HUB_TEST_CHECK(calls == 0);
     }
 
     {
@@ -51,12 +50,12 @@ int main() {
             bus.emit<Ping>(1);
         });
 
-        assert_ready(entered);
+        require_ready(entered);
         victim.reset();
         release_promise.set_value();
         dispatcher.join();
 
-        assert(victim_calls.load(std::memory_order_relaxed) == 0);
+        EVENT_HUB_TEST_CHECK(victim_calls.load(std::memory_order_relaxed) == 0);
     }
 
     {
@@ -86,12 +85,12 @@ int main() {
             bus.emit<Ping>(1);
         });
 
-        assert_ready(entered);
+        require_ready(entered);
         user_guard.reset();
         release_promise.set_value();
         dispatcher.join();
 
-        assert(guarded_calls.load(std::memory_order_relaxed) == 0);
+        EVENT_HUB_TEST_CHECK(guarded_calls.load(std::memory_order_relaxed) == 0);
     }
 
     {
@@ -110,20 +109,20 @@ int main() {
             [&entered_promise, release, &guard_destroyed](const Ping&) {
                 entered_promise.set_value();
                 release.wait();
-                assert(!guard_destroyed.load(std::memory_order_relaxed));
+                EVENT_HUB_TEST_CHECK(!guard_destroyed.load(std::memory_order_relaxed));
             });
 
         std::thread dispatcher([&bus] {
             bus.emit<Ping>(1);
         });
 
-        assert_ready(entered);
+        require_ready(entered);
         user_guard.reset();
-        assert(!guard_destroyed.load(std::memory_order_relaxed));
+        EVENT_HUB_TEST_CHECK(!guard_destroyed.load(std::memory_order_relaxed));
         release_promise.set_value();
         dispatcher.join();
 
-        assert(guard_destroyed.load(std::memory_order_relaxed));
+        EVENT_HUB_TEST_CHECK(guard_destroyed.load(std::memory_order_relaxed));
     }
 
     {
@@ -145,15 +144,15 @@ int main() {
             bus.emit<Ping>(1);
         });
 
-        assert_ready(entered);
+        require_ready(entered);
         module.reset();
-        assert(!module_destroyed.load(std::memory_order_relaxed));
+        EVENT_HUB_TEST_CHECK(!module_destroyed.load(std::memory_order_relaxed));
 
         release_promise.set_value();
         dispatcher.join();
 
-        assert(handled.load(std::memory_order_relaxed));
-        assert(module_destroyed.load(std::memory_order_relaxed));
+        EVENT_HUB_TEST_CHECK(handled.load(std::memory_order_relaxed));
+        EVENT_HUB_TEST_CHECK(module_destroyed.load(std::memory_order_relaxed));
     }
 
     return 0;

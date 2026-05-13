@@ -21,6 +21,9 @@ All notable changes to this project will be documented in this file.
   `agents/modules-and-module-hub.md`.
 - Fixed a `ModuleHub::start()` race where an early `request_stop()` could be
   cleared by background initialization.
+- Added periodic `TaskManager` scheduling with fixed-delay and fixed-rate
+  policies, optional initial delay, cancellation through `TaskId`, and tests.
+- Added `TaskContext` callbacks for task self-cancel and explicit reschedule.
 
 ## [v0.1.0] - 2026-05-12
 - Added the initial header-only C++17 event bus API with typed subscriptions,

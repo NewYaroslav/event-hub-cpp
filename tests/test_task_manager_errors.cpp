@@ -1,9 +1,11 @@
 #include "test_helpers.hpp"
 
 #include <chrono>
+#include <functional>
 #include <future>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 using namespace event_hub_test;
@@ -125,6 +127,100 @@ int main() {
     }
 
     {
+        event_hub::TaskManager tasks;
+        std::function<void()> empty_function;
+
+        EVENT_HUB_TEST_CHECK(tasks.post_every_ms(0, [] {}) == 0);
+        EVENT_HUB_TEST_CHECK(tasks.post_every_ms(-1, [] {}) == 0);
+        EVENT_HUB_TEST_CHECK(tasks.post_every_after_ms(0, 0, [] {}) == 0);
+        EVENT_HUB_TEST_CHECK(tasks.post_every_ms(1, empty_function) == 0);
+
+        tasks.close();
+        EVENT_HUB_TEST_CHECK(tasks.post_every_ms(1, [] {}) == 0);
+    }
+
+    {
+        event_hub::TaskManager tasks;
+        int calls = 0;
+
+        const auto id = tasks.post_every_ms(1, [&calls] {
+            ++calls;
+            throw std::runtime_error("periodic task failed");
+        });
+
+        bool threw = false;
+        try {
+            (void)tasks.process();
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+
+        EVENT_HUB_TEST_CHECK(id != 0);
+        EVENT_HUB_TEST_CHECK(threw);
+        EVENT_HUB_TEST_CHECK(calls == 1);
+        EVENT_HUB_TEST_CHECK(!tasks.has_pending());
+        EVENT_HUB_TEST_CHECK(!tasks.cancel(id));
+        EVENT_HUB_TEST_CHECK(tasks.process() == 0);
+    }
+
+    {
+        event_hub::TaskManager tasks;
+        int calls = 0;
+        int exception_count = 0;
+
+        tasks.set_exception_handler(
+            [&exception_count](std::exception_ptr exception) {
+                try {
+                    if (exception) {
+                        std::rethrow_exception(exception);
+                    }
+                } catch (const std::runtime_error&) {
+                    ++exception_count;
+                }
+            });
+
+        const auto id = tasks.post_every_ms(1, [&calls] {
+            ++calls;
+            throw std::runtime_error("periodic task failed");
+        });
+
+        EVENT_HUB_TEST_CHECK(id != 0);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(calls == 1);
+        EVENT_HUB_TEST_CHECK(exception_count == 1);
+        EVENT_HUB_TEST_CHECK(!tasks.has_pending());
+        EVENT_HUB_TEST_CHECK(!tasks.cancel(id));
+        EVENT_HUB_TEST_CHECK(tasks.process() == 0);
+    }
+
+    {
+        event_hub::TaskManager tasks;
+        int calls = 0;
+
+        const auto id = tasks.post([&calls](event_hub::TaskContext& self) {
+            ++calls;
+            EVENT_HUB_TEST_CHECK(self.reschedule_after(
+                std::chrono::milliseconds(1)));
+            throw std::runtime_error("rescheduled task failed");
+        });
+
+        bool threw = false;
+        try {
+            (void)tasks.process();
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+
+        EVENT_HUB_TEST_CHECK(id != 0);
+        EVENT_HUB_TEST_CHECK(threw);
+        EVENT_HUB_TEST_CHECK(calls == 1);
+        EVENT_HUB_TEST_CHECK(!tasks.has_pending());
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        EVENT_HUB_TEST_CHECK(tasks.process() == 0);
+    }
+
+    {
         event_hub::SyncNotifier notifier;
         event_hub::TaskManager tasks(&notifier);
 
@@ -132,7 +228,7 @@ int main() {
         const auto id = tasks.post([] {});
 
         EVENT_HUB_TEST_CHECK(id != 0);
-        EVENT_HUB_TEST_CHECK(notifier.wait_for(generation, std::chrono::milliseconds(0)));
+        EVENT_HUB_TEST_CHECK(notifier.wait_for_ms(generation, 0));
         EVENT_HUB_TEST_CHECK(tasks.process() == 1);
         tasks.reset_notifier();
     }
@@ -142,11 +238,13 @@ int main() {
 
         EVENT_HUB_TEST_CHECK(tasks.recommend_wait_for(std::chrono::milliseconds(10)) ==
                event_hub::TaskManager::Duration(std::chrono::milliseconds(10)));
+        EVENT_HUB_TEST_CHECK(tasks.recommend_wait_for_ms(10) ==
+               event_hub::TaskManager::Duration(std::chrono::milliseconds(10)));
         EVENT_HUB_TEST_CHECK(!tasks.next_deadline());
 
-        tasks.post_after(std::chrono::milliseconds(30), [] {});
+        tasks.post_after_ms(30, [] {});
         const auto delayed_wait =
-            tasks.recommend_wait_for(std::chrono::milliseconds(100));
+            tasks.recommend_wait_for_ms(100);
 
         EVENT_HUB_TEST_CHECK(tasks.next_deadline());
         EVENT_HUB_TEST_CHECK(delayed_wait > event_hub::TaskManager::Duration::zero());
@@ -154,7 +252,7 @@ int main() {
                event_hub::TaskManager::Duration(std::chrono::milliseconds(100)));
 
         tasks.post([] {});
-        EVENT_HUB_TEST_CHECK(tasks.recommend_wait_for(std::chrono::milliseconds(10)) ==
+        EVENT_HUB_TEST_CHECK(tasks.recommend_wait_for_ms(10) ==
                event_hub::TaskManager::Duration::zero());
 
         EVENT_HUB_TEST_CHECK(tasks.clear_pending() == 2);

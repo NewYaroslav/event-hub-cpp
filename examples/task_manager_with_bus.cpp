@@ -1,6 +1,5 @@
 #include <event_hub.hpp>
 
-#include <chrono>
 #include <iostream>
 #include <string>
 
@@ -9,8 +8,6 @@ struct LogEvent {
 };
 
 int main() {
-    using namespace std::chrono_literals;
-
     event_hub::SyncNotifier notifier;
 
     event_hub::EventBus bus;
@@ -32,27 +29,38 @@ int main() {
     tasks.post([] {
         std::cout << "task: immediate work\n";
     });
-    tasks.post_after(2ms, [&endpoint] {
+
+    tasks.post_after_ms(2, [&endpoint] {
         endpoint.post<LogEvent>("published by delayed task");
     });
-    tasks.post_after(4ms, [&endpoint] {
+
+    tasks.post_after_ms(4, [&endpoint] {
         endpoint.post<LogEvent>("quit");
     });
 
     while (running) {
+        // Capture the shared wake-up generation before processing either
+        // source. A bus or task notification that arrives while this loop is
+        // busy will then make wait_for() return immediately.
         const auto generation = notifier.generation();
 
         std::size_t work_done = 0;
+        // Process both passive sources on this application-owned thread.
         work_done += bus.process();
+        // Limit task callbacks per iteration so the bus gets regular chances
+        // to dispatch events even if producers keep filling the task queue.
         work_done += tasks.process(128);
 
         if (work_done != 0) {
             continue;
         }
 
-        const auto timeout = tasks.recommend_wait_for(1ms);
+        // Use 1 ms as the idle cap, but wake sooner for the next delayed task.
+        const auto timeout = tasks.recommend_wait_for_ms(1);
 
         if (!bus.has_pending() && !tasks.has_ready()) {
+            // Sleep only when both sources are idle. The old generation keeps
+            // notifications between processing and waiting from being lost.
             (void)notifier.wait_for(generation, timeout);
         }
     }

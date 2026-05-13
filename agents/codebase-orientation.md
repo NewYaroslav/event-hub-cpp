@@ -35,8 +35,10 @@ Core vocabulary:
 - `INotifier` and `SyncNotifier` - optional external wake-up mechanism for
   application-owned event loops.
 - `Task` - move-only type-erased `void()` callable for C++17 task queues.
-- `TaskManager` - optional passive queue for immediate and delayed one-shot
-  tasks processed by an application thread.
+- `TaskContext` - lightweight callback facade that lets a running task inspect
+  its id, cancel future work, or request rescheduling.
+- `TaskManager` - optional passive queue for immediate, delayed one-shot, and
+  periodic tasks processed by an application thread.
 - `RunLoop` - optional blocking helper that processes any number of registered
   `EventBus` and `TaskManager` instances on the calling thread.
 - `Module` - `EventNode` plus an owned `TaskManager` and explicit
@@ -225,14 +227,28 @@ Important design points:
 
 - `TaskManager` is passive and header-only. It does not own a thread, sleep by
   itself, or expose `run()`/`join()` APIs.
-- Producers may call `post`, `post_after`, `post_at`, `post_batch`, `submit`,
-  and `cancel` from other threads. `process`, `clear_pending`, `close`, and
-  destruction remain single-consumer/lifetime operations.
+- Producers may call `post`, `post_after`, `post_at`, `post_every`,
+  `post_every_after`, `post_batch`, `submit`, and `cancel` from other threads.
+  `process`, `clear_pending`, `close`, and destruction remain
+  single-consumer/lifetime operations.
 - `Task` exists because C++17 `std::function<void()>` cannot store move-only
-  callables. Keep this wrapper small and dependency-free.
-- Ready queues are fixed high/normal/low FIFO deques. Delayed tasks use
-  `std::chrono::steady_clock` deadlines in a min-heap. Do not add periodic
-  scheduling to the core.
+  callables. It also supports `void(TaskContext&)` callbacks for self-cancel
+  and reschedule. Keep this wrapper small and dependency-free.
+- `TaskContext` is an opt-in callback facade, not an owning handle. It is valid
+  only during the callback. Use it when a task needs `id()`, `cancel()`, or
+  `reschedule_at/after()`; keep simple examples on no-arg callbacks.
+- Context-aware callbacks are supported by `post`, delayed one-shot APIs,
+  periodic APIs, and `post_batch` tasks already constructed as `Task`.
+  `submit()` deliberately remains no-context because it is a future-result API.
+- Context reschedule keeps the same `TaskId`. For one-shot tasks it reruns the
+  same callback; for periodic tasks it overrides only the next cycle, then the
+  normal fixed-delay or fixed-rate policy resumes. If cancellation and
+  reschedule are both requested inside one callback, cancellation wins.
+- Ready queues are fixed high/normal/low FIFO deques. Delayed and periodic
+  tasks use `std::chrono::steady_clock` deadlines in a min-heap.
+- Periodic tasks keep one `TaskId` for the whole series. The first cycle is
+  ready immediately by default; later cycles use fixed-delay or fixed-rate
+  scheduling according to `PeriodicTaskOptions`.
 - Cancellation is lazy through `TaskId` and atomic state. Do not make eager
   container erase the main cancellation mechanism.
 - `process()` takes a snapshot of ready work. Tasks posted by callbacks run on

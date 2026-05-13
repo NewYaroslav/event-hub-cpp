@@ -26,8 +26,8 @@
 - `EventEndpoint` владеет подписками и автоматически отписывается.
 - `emit<T>()` отправляет событие синхронно.
 - `post<T>()` кладет событие в очередь до явного `process()`.
-- Опциональный `TaskManager` кладет immediate, delayed и future-returning
-  задачи в ту же модель явной обработки.
+- Опциональный `TaskManager` кладет immediate, delayed, periodic и
+  future-returning задачи в ту же модель явной обработки.
 - Опциональный `RunLoop` блокирует текущий поток и обрабатывает любое число
   event bus-ов и task manager-ов.
 - Опциональные внешние notifier-ы будят application event loop после появления
@@ -51,8 +51,8 @@
 | `<event_hub/event_listener.hpp>` | Опциональный generic-listener для наследников `Event`. |
 | `<event_hub/notifier.hpp>` | `INotifier` и `SyncNotifier` для внешнего пробуждения event loop. |
 | `<event_hub/run_loop.hpp>` | Блокирующий current-thread loop для зарегистрированных шин и task manager-ов. |
-| `<event_hub/task.hpp>` | Move-only `Task`, `TaskId`, приоритет и опции задач. |
-| `<event_hub/task_manager.hpp>` | Пассивный `TaskManager` для immediate и delayed задач. |
+| `<event_hub/task.hpp>` | Move-only `Task`, `TaskContext`, `TaskId`, приоритет, periodic policy и опции задач. |
+| `<event_hub/task_manager.hpp>` | Пассивный `TaskManager` для immediate, delayed и periodic задач. |
 
 ## Быстрый Старт
 
@@ -107,9 +107,8 @@ public:
 ```cpp
 event_hub::CancellationSource source;
 
-event_hub::AwaitOptions options;
+auto options = event_hub::AwaitOptions::timeout_ms(5000);
 options.token = source.token();
-options.timeout = std::chrono::seconds(5);
 options.on_timeout = [] {
     // обработать timeout
 };
@@ -152,13 +151,25 @@ tasks.process();
 assert(future.get() == 42);
 ```
 
-Задачи могут быть immediate или one-shot delayed. Ready-задачи поддерживают
-фиксированные приоритеты `high`, `normal` и `low`, сохраняя FIFO внутри одного
-приоритета. `Task` является move-only, поэтому в C++17 можно ставить в очередь
-lambda с move-only захватами.
+Задачи могут быть immediate, one-shot delayed или periodic. Ready-задачи
+поддерживают фиксированные приоритеты `high`, `normal` и `low`, сохраняя FIFO
+внутри одного приоритета. `Task` является move-only, поэтому в C++17 можно
+ставить в очередь lambda с move-only захватами.
 
-`TaskManager` не добавляет periodic scheduling. Повторяющуюся работу лучше
-строить поверх него через отправку следующей delayed task из callback-а.
+Periodic-задачи выполняются только из `process()`. По умолчанию первый цикл
+становится ready сразу, а следующие циклы используют fixed-delay scheduling.
+Используйте `post_every_after(...)` или `post_every_after_ms(...)`, чтобы
+задержать первый цикл, и задайте `PeriodicTaskOptions::schedule` в
+`PeriodicSchedule::fixed_rate`, если циклы должны считаться от плановых
+deadline-ов, а не от времени завершения callback-а. Чтобы остановить будущие
+циклы, отмените возвращенный `TaskId`. Если periodic callback бросает
+исключение, эта periodic-задача останавливается, а дальше применяется обычная
+exception policy `TaskManager`.
+
+Task callback-и также могут принимать `event_hub::TaskContext&`. Context дает
+id текущей задачи, `cancel()` и `reschedule_at(...)` / `reschedule_after(...)`;
+это удобно для self-cancel periodic-задач и retry-like one-shot задач без
+захвата `TaskId`.
 
 ## RunLoop
 
@@ -175,7 +186,7 @@ event_hub::RunLoop loop;
 loop.add(bus);
 loop.add(tasks);
 
-tasks.post_after(std::chrono::milliseconds(10), [&loop] {
+tasks.post_after_ms(10, [&loop] {
     loop.request_stop();
 });
 
@@ -307,6 +318,7 @@ ctest --test-dir build --output-on-failure
 - `event_hub_strict_lifetime` из `examples/strict_lifetime.cpp`;
 - `event_hub_external_notifier` из `examples/external_notifier.cpp`;
 - `event_hub_task_manager` из `examples/task_manager.cpp`;
+- `event_hub_task_manager_periodic` из `examples/task_manager_periodic.cpp`;
 - `event_hub_task_manager_with_bus` из `examples/task_manager_with_bus.cpp`;
 - `event_hub_run_loop` из `examples/run_loop.cpp`;
 - `event_hub_test_*` поведенческие тесты из `tests/test_*.cpp`.
@@ -344,6 +356,10 @@ CI также проверяет подключение установленно
   `SyncNotifier` для `EventBus` и `TaskManager`.
 - [task_manager.cpp](examples/task_manager.cpp) - самостоятельный loop для
   `TaskManager` с priority, delayed tasks и `submit()`.
+- [task_manager_periodic.cpp](examples/task_manager_periodic.cpp) -
+  periodic-задачи `TaskManager` с immediate start, delayed first cycle,
+  fixed-delay/fixed-rate scheduling, context self-cancel, self-reschedule и
+  обработанными ошибками.
 - [task_manager_with_bus.cpp](examples/task_manager_with_bus.cpp) - ручной
   shared-notifier loop для `EventBus` и `TaskManager`.
 - [run_loop.cpp](examples/run_loop.cpp) - удобный `RunLoop` для одной шины и
@@ -371,19 +387,24 @@ event_hub::TaskManager tasks;
 tasks.set_notifier(&notifier);
 
 while (running) {
+    // Сохраняем состояние notifier-а до обработки, чтобы не потерять wake-up,
+    // который придет перед ожиданием.
     const auto generation = notifier.generation();
 
     std::size_t work_done = 0;
     work_done += bus.process();
+    // Ограничиваем задачи за один проход, чтобы другие источники тоже работали.
     work_done += tasks.process(128);
 
     if (work_done != 0) {
         continue;
     }
 
+    // Спим не дольше 1 ms, но просыпаемся раньше, если подходит delayed task.
     const auto timeout =
-        tasks.recommend_wait_for(std::chrono::milliseconds(1));
+        tasks.recommend_wait_for_ms(1);
     if (!bus.has_pending() && !tasks.has_ready()) {
+        // Если generation изменился после обработки, ожидание сразу вернется.
         notifier.wait_for(generation, timeout);
     }
 }

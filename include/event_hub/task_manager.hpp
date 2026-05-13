@@ -140,7 +140,7 @@ public:
         typename F,
         typename std::enable_if<
             !std::is_same<typename std::decay<F>::type, Task>::value &&
-                std::is_invocable_r<void, typename std::decay<F>::type&>::value,
+                detail::is_task_callback<F>::value,
             int>::type = 0>
     TaskId post(F&& fn, TaskOptions options = {}) {
         return post(Task(std::forward<F>(fn)), options);
@@ -163,7 +163,7 @@ public:
         typename F,
         typename std::enable_if<
             !std::is_same<typename std::decay<F>::type, Task>::value &&
-                std::is_invocable_r<void, typename std::decay<F>::type&>::value,
+                detail::is_task_callback<F>::value,
             int>::type = 0>
     TaskId post_after(const std::chrono::duration<Rep, Period>& delay,
                       F&& fn,
@@ -171,6 +171,183 @@ public:
         const auto due =
             Clock::now() + std::chrono::duration_cast<Duration>(delay);
         return post_at(due, Task(std::forward<F>(fn)), options);
+    }
+
+    /// \brief Submit a task to run after delay_ms milliseconds.
+    TaskId post_after_ms(std::int64_t delay_ms,
+                         Task task,
+                         TaskOptions options = {}) {
+        return post_after(std::chrono::milliseconds(delay_ms),
+                          std::move(task),
+                          options);
+    }
+
+    /// \brief Submit a callable to run after delay_ms milliseconds.
+    template <
+        typename F,
+        typename std::enable_if<
+            !std::is_same<typename std::decay<F>::type, Task>::value &&
+                detail::is_task_callback<F>::value,
+            int>::type = 0>
+    TaskId post_after_ms(std::int64_t delay_ms,
+                         F&& fn,
+                         TaskOptions options = {}) {
+        return post_after(std::chrono::milliseconds(delay_ms),
+                          Task(std::forward<F>(fn)),
+                          options);
+    }
+
+    /// \brief Submit a periodic task whose first cycle is ready immediately.
+    ///
+    /// The task runs only from process(). The returned id identifies the whole
+    /// periodic series and can be passed to cancel().
+    ///
+    /// \return The task id, or zero when interval is non-positive, the task is
+    /// empty, or the manager is closed.
+    template <typename Rep, typename Period>
+    TaskId post_every(const std::chrono::duration<Rep, Period>& interval,
+                      Task task,
+                      PeriodicTaskOptions options = {}) {
+        return post_every_after(Duration::zero(),
+                                interval,
+                                std::move(task),
+                                options);
+    }
+
+    /// \brief Submit a periodic callable whose first cycle is ready immediately.
+    template <
+        typename Rep,
+        typename Period,
+        typename F,
+        typename std::enable_if<
+            !std::is_same<typename std::decay<F>::type, Task>::value &&
+                detail::is_task_callback<F>::value,
+            int>::type = 0>
+    TaskId post_every(const std::chrono::duration<Rep, Period>& interval,
+                      F&& fn,
+                      PeriodicTaskOptions options = {}) {
+        return post_every(interval,
+                          Task(std::forward<F>(fn)),
+                          options);
+    }
+
+    /// \brief Submit a periodic task with an initial delay before the first run.
+    ///
+    /// A non-positive initial delay makes the first cycle ready immediately.
+    /// A non-positive interval rejects the submission.
+    template <typename DelayRep,
+              typename DelayPeriod,
+              typename IntervalRep,
+              typename IntervalPeriod>
+    TaskId post_every_after(
+        const std::chrono::duration<DelayRep, DelayPeriod>& initial_delay,
+        const std::chrono::duration<IntervalRep, IntervalPeriod>& interval,
+        Task task,
+        PeriodicTaskOptions options = {}) {
+        if (!task) {
+            return 0;
+        }
+
+        const auto period = std::chrono::duration_cast<Duration>(interval);
+        if (period <= Duration::zero()) {
+            return 0;
+        }
+
+        const auto now = Clock::now();
+        const auto delay = std::chrono::duration_cast<Duration>(initial_delay);
+        const auto due = delay <= Duration::zero() ? now : now + delay;
+
+        TaskId id = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_closed.load(std::memory_order_acquire)) {
+                return 0;
+            }
+
+            id = enqueue_periodic_locked(due,
+                                         period,
+                                         std::move(task),
+                                         options);
+        }
+
+        if (id != 0) {
+            notify_work_available();
+        }
+        return id;
+    }
+
+    /// \brief Submit a periodic callable with an initial delay.
+    template <
+        typename DelayRep,
+        typename DelayPeriod,
+        typename IntervalRep,
+        typename IntervalPeriod,
+        typename F,
+        typename std::enable_if<
+            !std::is_same<typename std::decay<F>::type, Task>::value &&
+                detail::is_task_callback<F>::value,
+            int>::type = 0>
+    TaskId post_every_after(
+        const std::chrono::duration<DelayRep, DelayPeriod>& initial_delay,
+        const std::chrono::duration<IntervalRep, IntervalPeriod>& interval,
+        F&& fn,
+        PeriodicTaskOptions options = {}) {
+        return post_every_after(initial_delay,
+                                interval,
+                                Task(std::forward<F>(fn)),
+                                options);
+    }
+
+    /// \brief Submit a periodic task with an interval in milliseconds.
+    TaskId post_every_ms(std::int64_t interval_ms,
+                         Task task,
+                         PeriodicTaskOptions options = {}) {
+        return post_every(std::chrono::milliseconds(interval_ms),
+                          std::move(task),
+                          options);
+    }
+
+    /// \brief Submit a periodic callable with an interval in milliseconds.
+    template <
+        typename F,
+        typename std::enable_if<
+            !std::is_same<typename std::decay<F>::type, Task>::value &&
+                detail::is_task_callback<F>::value,
+            int>::type = 0>
+    TaskId post_every_ms(std::int64_t interval_ms,
+                         F&& fn,
+                         PeriodicTaskOptions options = {}) {
+        return post_every(std::chrono::milliseconds(interval_ms),
+                          Task(std::forward<F>(fn)),
+                          options);
+    }
+
+    /// \brief Submit a periodic task with millisecond initial delay/interval.
+    TaskId post_every_after_ms(std::int64_t initial_delay_ms,
+                               std::int64_t interval_ms,
+                               Task task,
+                               PeriodicTaskOptions options = {}) {
+        return post_every_after(std::chrono::milliseconds(initial_delay_ms),
+                                std::chrono::milliseconds(interval_ms),
+                                std::move(task),
+                                options);
+    }
+
+    /// \brief Submit a periodic callable with millisecond delay/interval.
+    template <
+        typename F,
+        typename std::enable_if<
+            !std::is_same<typename std::decay<F>::type, Task>::value &&
+                detail::is_task_callback<F>::value,
+            int>::type = 0>
+    TaskId post_every_after_ms(std::int64_t initial_delay_ms,
+                               std::int64_t interval_ms,
+                               F&& fn,
+                               PeriodicTaskOptions options = {}) {
+        return post_every_after(std::chrono::milliseconds(initial_delay_ms),
+                                std::chrono::milliseconds(interval_ms),
+                                Task(std::forward<F>(fn)),
+                                options);
     }
 
     /// \brief Submit a task to run at a steady-clock time point.
@@ -207,7 +384,7 @@ public:
         typename F,
         typename std::enable_if<
             !std::is_same<typename std::decay<F>::type, Task>::value &&
-                std::is_invocable_r<void, typename std::decay<F>::type&>::value,
+                detail::is_task_callback<F>::value,
             int>::type = 0>
     TaskId post_at(TimePoint due, F&& fn, TaskOptions options = {}) {
         return post_at(due, Task(std::forward<F>(fn)), options);
@@ -273,7 +450,8 @@ public:
     /// \brief Cancel a task that has not started.
     ///
     /// \return True when the task was queued or in the current process()
-    /// snapshot and is now cancelled.
+    /// snapshot and is now cancelled. For an executing periodic task, returns
+    /// true when future cycles are cancelled.
     bool cancel(TaskId id) noexcept {
         if (id == 0) {
             return false;
@@ -314,6 +492,16 @@ public:
             return true;
 
         case State::executing:
+            if (!control->periodic) {
+                return false;
+            }
+            if (!transition(*control, state, State::cancelled)) {
+                return false;
+            }
+            decrement_pending_count();
+            control->reschedule_requested = false;
+            return true;
+
         case State::cancelled:
         case State::completed:
             return false;
@@ -354,17 +542,17 @@ public:
                 continue;
             }
 
-            decrement_pending_count();
-            erase_index(entry.id);
+            if (!entry.periodic) {
+                decrement_pending_count();
+            }
 
+            auto context = make_context(entry.id);
             try {
-                entry.task();
-                entry.control->state.store(State::completed,
-                                           std::memory_order_release);
+                entry.task(context);
+                finish_after_success(std::move(entry));
                 ++processed;
             } catch (...) {
-                entry.control->state.store(State::completed,
-                                           std::memory_order_release);
+                finish_after_exception(entry);
                 const auto exception = std::current_exception();
 
                 try {
@@ -483,6 +671,11 @@ public:
         return until_deadline < cap ? until_deadline : cap;
     }
 
+    /// \brief Compute a recommended external wait duration in milliseconds.
+    Duration recommend_wait_for_ms(std::int64_t idle_cap_ms) {
+        return recommend_wait_for(std::chrono::milliseconds(idle_cap_ms));
+    }
+
 private:
     enum class State : std::uint8_t {
         queued_ready,
@@ -494,11 +687,15 @@ private:
     };
 
     struct Control {
-        Control(TaskId id_, State state_) noexcept
+        Control(TaskId id_, State state_, bool periodic_) noexcept
             : id(id_),
+              periodic(periodic_),
               state(state_) {}
 
         TaskId id = 0;
+        bool periodic = false;
+        bool reschedule_requested = false;
+        TimePoint reschedule_due{};
         std::atomic<State> state{State::completed};
     };
 
@@ -507,6 +704,10 @@ private:
         std::uint64_t seq = 0;
         TaskPriority priority{TaskPriority::normal};
         TimePoint due{};
+        bool periodic = false;
+        Duration interval{Duration::zero()};
+        PeriodicSchedule periodic_schedule{PeriodicSchedule::fixed_delay};
+        TimePoint planned_due{};
         std::shared_ptr<Control> control;
         Task task;
     };
@@ -568,7 +769,8 @@ private:
 
     TaskId enqueue_ready_locked(Task task, TaskOptions options) {
         const auto id = next_id();
-        auto control = std::make_shared<Control>(id, State::queued_ready);
+        auto control =
+            std::make_shared<Control>(id, State::queued_ready, false);
 
         Entry entry;
         entry.id = id;
@@ -588,7 +790,8 @@ private:
                                   Task task,
                                   TaskOptions options) {
         const auto id = next_id();
-        auto control = std::make_shared<Control>(id, State::queued_delayed);
+        auto control =
+            std::make_shared<Control>(id, State::queued_delayed, false);
 
         Entry entry;
         entry.id = id;
@@ -603,6 +806,44 @@ private:
         std::push_heap(m_delayed_heap.begin(),
                        m_delayed_heap.end(),
                        DelayedSooner{});
+        increment_pending_count();
+        return id;
+    }
+
+    TaskId enqueue_periodic_locked(TimePoint due,
+                                   Duration interval,
+                                   Task task,
+                                   PeriodicTaskOptions options) {
+        const auto ready = due <= Clock::now();
+        const auto state =
+            ready ? State::queued_ready : State::queued_delayed;
+        const auto id = next_id();
+        auto control = std::make_shared<Control>(id, state, true);
+
+        Entry entry;
+        entry.id = id;
+        entry.seq = next_seq();
+        entry.priority = options.priority;
+        entry.due = due;
+        entry.periodic = true;
+        entry.interval = interval;
+        entry.periodic_schedule = options.schedule;
+        entry.planned_due = due;
+        entry.control = control;
+        entry.task = std::move(task);
+
+        m_index.emplace(id, control);
+        if (ready) {
+            m_ready[priority_index(options.priority)].push_back(
+                std::move(entry));
+            increment_ready_count();
+        } else {
+            m_delayed_heap.push_back(std::move(entry));
+            std::push_heap(m_delayed_heap.begin(),
+                           m_delayed_heap.end(),
+                           DelayedSooner{});
+        }
+
         increment_pending_count();
         return id;
     }
@@ -629,11 +870,6 @@ private:
         m_pending_count.fetch_sub(1, std::memory_order_relaxed);
     }
 
-    void erase_index(TaskId id) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_index.erase(id);
-    }
-
     ExceptionHandler exception_handler() const {
         std::lock_guard<std::mutex> lock(m_exception_handler_mutex);
         return m_exception_handler;
@@ -646,6 +882,98 @@ private:
         }
 
         handler(std::move(exception));
+        return true;
+    }
+
+    TaskContext make_context(TaskId id) noexcept {
+        return TaskContext(this,
+                           id,
+                           &TaskManager::context_cancel,
+                           &TaskManager::context_is_cancelled,
+                           &TaskManager::context_reschedule);
+    }
+
+    static bool context_cancel(void* owner, TaskId id) noexcept {
+        return static_cast<TaskManager*>(owner)->cancel_from_context(id);
+    }
+
+    static bool context_is_cancelled(void* owner, TaskId id) noexcept {
+        return static_cast<TaskManager*>(owner)->is_cancelled_for_context(id);
+    }
+
+    static bool context_reschedule(void* owner,
+                                   TaskId id,
+                                   TaskContext::TimePoint due) noexcept {
+        return static_cast<TaskManager*>(owner)->reschedule_from_context(id,
+                                                                        due);
+    }
+
+    bool cancel_from_context(TaskId id) noexcept {
+        if (id == 0) {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_index.find(id);
+        if (it == m_index.end()) {
+            return false;
+        }
+
+        auto& control = it->second;
+        auto state = control->state.load(std::memory_order_acquire);
+        if (state != State::executing) {
+            return false;
+        }
+
+        if (!transition(*control, state, State::cancelled)) {
+            return false;
+        }
+
+        control->reschedule_requested = false;
+        if (control->periodic) {
+            decrement_pending_count();
+        }
+        return true;
+    }
+
+    bool is_cancelled_for_context(TaskId id) const noexcept {
+        if (id == 0) {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_index.find(id);
+        if (it == m_index.end()) {
+            return false;
+        }
+
+        return it->second->state.load(std::memory_order_acquire) ==
+               State::cancelled;
+    }
+
+    bool reschedule_from_context(TaskId id, TimePoint due) noexcept {
+        if (id == 0) {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_closed.load(std::memory_order_acquire)) {
+            return false;
+        }
+
+        auto it = m_index.find(id);
+        if (it == m_index.end()) {
+            return false;
+        }
+
+        auto& control = it->second;
+        if (control->state.load(std::memory_order_acquire) !=
+            State::executing) {
+            return false;
+        }
+
+        control->reschedule_requested = true;
+        control->reschedule_due = due;
         return true;
     }
 
@@ -713,6 +1041,126 @@ private:
         }
 
         return batch;
+    }
+
+    TimePoint next_periodic_due(const Entry& entry, TimePoint now) const {
+        if (entry.periodic_schedule == PeriodicSchedule::fixed_rate) {
+            return entry.planned_due + entry.interval;
+        }
+
+        return now + entry.interval;
+    }
+
+    void enqueue_existing_locked(Entry entry, TimePoint due) {
+        const auto now = Clock::now();
+        const auto ready = due <= now;
+        const auto desired =
+            ready ? State::queued_ready : State::queued_delayed;
+
+        auto state = State::executing;
+        if (!entry.control->state.compare_exchange_strong(
+                state,
+                desired,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            return;
+        }
+
+        if (!entry.periodic) {
+            increment_pending_count();
+        }
+
+        entry.seq = next_seq();
+        entry.due = due;
+        entry.planned_due = due;
+
+        if (ready) {
+            m_ready[priority_index(entry.priority)].push_back(
+                std::move(entry));
+            increment_ready_count();
+            return;
+        }
+
+        m_delayed_heap.push_back(std::move(entry));
+        std::push_heap(m_delayed_heap.begin(),
+                       m_delayed_heap.end(),
+                       DelayedSooner{});
+    }
+
+    void finish_after_success(Entry entry) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        auto state = entry.control->state.load(std::memory_order_acquire);
+        if (state == State::cancelled) {
+            entry.control->reschedule_requested = false;
+            m_index.erase(entry.id);
+            return;
+        }
+
+        if (state != State::executing) {
+            return;
+        }
+
+        if (m_closed.load(std::memory_order_acquire)) {
+            if (entry.control->state.compare_exchange_strong(
+                    state,
+                    State::completed,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                if (entry.periodic) {
+                    decrement_pending_count();
+                }
+                entry.control->reschedule_requested = false;
+                m_index.erase(entry.id);
+            }
+            return;
+        }
+
+        if (entry.control->reschedule_requested) {
+            const auto due = entry.control->reschedule_due;
+            entry.control->reschedule_requested = false;
+            enqueue_existing_locked(std::move(entry), due);
+            return;
+        }
+
+        if (entry.periodic) {
+            const auto due = next_periodic_due(entry, Clock::now());
+            enqueue_existing_locked(std::move(entry), due);
+            return;
+        }
+
+        if (entry.control->state.compare_exchange_strong(
+                state,
+                State::completed,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            m_index.erase(entry.id);
+        }
+    }
+
+    void finish_after_exception(Entry& entry) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        entry.control->reschedule_requested = false;
+
+        auto state = entry.control->state.load(std::memory_order_acquire);
+        if (state == State::executing) {
+            if (entry.control->state.compare_exchange_strong(
+                    state,
+                    State::completed,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                if (entry.periodic) {
+                    decrement_pending_count();
+                }
+                m_index.erase(entry.id);
+            }
+            return;
+        }
+
+        if (state == State::cancelled) {
+            m_index.erase(entry.id);
+        }
     }
 
     void restore_unrun(std::vector<Entry>& batch, std::size_t first_unrun) {

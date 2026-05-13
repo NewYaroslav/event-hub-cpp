@@ -15,9 +15,13 @@ struct TimeoutEvent {
 };
 
 int main() {
+    using namespace std::chrono_literals;
+
     event_hub::EventBus bus;
     event_hub::EventEndpoint endpoint(bus);
 
+    // await_once() keeps an internal subscription until the predicate matches.
+    // This handler runs once for the first JobEvent that reaches 100%.
     endpoint.await_once<JobEvent>(
         [](const JobEvent& event) {
             return event.progress == 100;
@@ -26,6 +30,8 @@ int main() {
             std::cout << "job finished: " << event.id << '\n';
         });
 
+    // await_each() keeps listening until the returned handle is cancelled, the
+    // endpoint is closed, a token cancels it, or a timeout expires.
     auto progress_stream = endpoint.await_each<JobEvent>(
         [](const JobEvent& event) {
             std::cout << "progress: " << event.id << ' ' << event.progress << '\n';
@@ -33,33 +39,44 @@ int main() {
 
     endpoint.post<JobEvent>("compile", 10);
     endpoint.post<JobEvent>("compile", 100);
+    // process() dispatches queued events and then polls awaiters for timeout
+    // and cancellation state. Awaiter callbacks run on this same thread.
     bus.process();
 
+    // The stream handle owns cancellation for await_each(). After cancel(),
+    // later JobEvent emissions no longer reach the progress callback.
     progress_stream->cancel();
     endpoint.emit<JobEvent>("compile", 200);
 
     event_hub::CancellationSource source;
     event_hub::AwaitOptions cancelled_options;
     cancelled_options.token = source.token();
+    // Cancellation tokens are cooperative: the awaiter observes cancellation
+    // when the bus next emits or processes events and polls awaiters.
     endpoint.await_once<JobEvent>(
         [](const JobEvent&) {
             std::cout << "this line is cancelled\n";
         },
         cancelled_options);
     source.cancel();
+    // This emit gives the bus a poll point where the cancelled token is seen.
     endpoint.emit<JobEvent>("compile", 300);
 
-    event_hub::AwaitOptions timeout_options;
-    timeout_options.timeout = std::chrono::milliseconds(1);
+    auto timeout_options = event_hub::AwaitOptions::timeout_ms(1);
+    // Timeouts do not start a background thread. The callback fires when the
+    // bus is polled after the deadline has passed.
     timeout_options.on_timeout = [] {
         std::cout << "timeout fired\n";
     };
+
     endpoint.await_once<TimeoutEvent>(
         [](const TimeoutEvent&) {
             std::cout << "this line should not print\n";
         },
         timeout_options);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    std::this_thread::sleep_for(2ms);
+    // No TimeoutEvent is posted; process() is the poll point that notices the
+    // expired timeout and invokes on_timeout.
     bus.process();
 }

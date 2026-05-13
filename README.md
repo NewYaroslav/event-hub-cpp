@@ -27,8 +27,8 @@ Key characteristics:
 - `EventNode` offers a protected endpoint-like API for listener-style modules.
 - `emit<T>()` dispatches synchronously.
 - `post<T>()` queues work for an explicit `process()` point.
-- Optional `TaskManager` queues immediate, delayed, and future-returning tasks
-  for the same explicit processing model.
+- Optional `TaskManager` queues immediate, delayed, periodic, and
+  future-returning tasks for the same explicit processing model.
 - Optional `RunLoop` blocks the calling thread while processing any number of
   event buses and task managers.
 - Optional external notifiers wake application event loops after queued work is
@@ -54,8 +54,8 @@ Key characteristics:
 | `<event_hub/event_listener.hpp>` | Optional generic listener interface for `Event`-derived types. |
 | `<event_hub/notifier.hpp>` | `INotifier` and `SyncNotifier` for external event-loop wakeups. |
 | `<event_hub/run_loop.hpp>` | Blocking current-thread loop for registered buses and task managers. |
-| `<event_hub/task.hpp>` | Move-only `Task`, `TaskId`, priority, and task options. |
-| `<event_hub/task_manager.hpp>` | Passive `TaskManager` for immediate and delayed task processing. |
+| `<event_hub/task.hpp>` | Move-only `Task`, `TaskContext`, `TaskId`, priority, periodic policy, and task options. |
+| `<event_hub/task_manager.hpp>` | Passive `TaskManager` for immediate, delayed, and periodic task processing. |
 
 ## Quick Start
 
@@ -144,9 +144,8 @@ cancellation token stops it.
 ```cpp
 event_hub::CancellationSource source;
 
-event_hub::AwaitOptions options;
+auto options = event_hub::AwaitOptions::timeout_ms(5000);
 options.token = source.token();
-options.timeout = std::chrono::seconds(5);
 options.on_timeout = [] {
     // handle timeout
 };
@@ -189,13 +188,24 @@ tasks.process();
 assert(future.get() == 42);
 ```
 
-Tasks can be immediate or one-shot delayed, and ready tasks can use fixed
-`high`, `normal`, or `low` priorities while preserving FIFO order inside each
-priority. `Task` is move-only, so C++17 code can queue lambdas that capture
+Tasks can be immediate, one-shot delayed, or periodic, and ready tasks can use
+fixed `high`, `normal`, or `low` priorities while preserving FIFO order inside
+each priority. `Task` is move-only, so C++17 code can queue lambdas that capture
 move-only values.
 
-`TaskManager` does not provide periodic scheduling. Build repeating work by
-posting a follow-up delayed task from the callback when that policy is needed.
+Periodic tasks run only from `process()`. By default, the first cycle is ready
+immediately, then later cycles use fixed-delay scheduling. Use
+`post_every_after(...)` or `post_every_after_ms(...)` to delay the first cycle,
+and set `PeriodicTaskOptions::schedule` to `PeriodicSchedule::fixed_rate` when
+cycles should be based on planned deadlines instead of callback completion time.
+Cancel the returned `TaskId` to stop future cycles. If a periodic callback
+throws, that periodic task stops and the normal `TaskManager` exception policy
+applies.
+
+Task callbacks may also accept `event_hub::TaskContext&`. The context exposes
+the running task id, `cancel()`, and `reschedule_at(...)` /
+`reschedule_after(...)`, which is useful for self-cancelling periodic work or
+retry-like one-shot tasks without capturing a `TaskId`.
 
 ## RunLoop
 
@@ -212,7 +222,7 @@ event_hub::RunLoop loop;
 loop.add(bus);
 loop.add(tasks);
 
-tasks.post_after(std::chrono::milliseconds(10), [&loop] {
+tasks.post_after_ms(10, [&loop] {
     loop.request_stop();
 });
 
@@ -343,6 +353,7 @@ The top-level build creates:
 - `event_hub_strict_lifetime` from `examples/strict_lifetime.cpp`;
 - `event_hub_external_notifier` from `examples/external_notifier.cpp`;
 - `event_hub_task_manager` from `examples/task_manager.cpp`;
+- `event_hub_task_manager_periodic` from `examples/task_manager_periodic.cpp`;
 - `event_hub_task_manager_with_bus` from `examples/task_manager_with_bus.cpp`;
 - `event_hub_run_loop` from `examples/run_loop.cpp`;
 - `event_hub_test_*` behavior tests from `tests/test_*.cpp`.
@@ -380,6 +391,10 @@ the vcpkg overlay port on Linux.
   `SyncNotifier` shared by `EventBus` and `TaskManager`.
 - [task_manager.cpp](examples/task_manager.cpp) - standalone `TaskManager`
   loop with priority, delayed tasks, and `submit()`.
+- [task_manager_periodic.cpp](examples/task_manager_periodic.cpp) -
+  periodic `TaskManager` work with immediate start, delayed first cycle,
+  fixed-delay/fixed-rate scheduling, context self-cancel, self-reschedule, and
+  handled failures.
 - [task_manager_with_bus.cpp](examples/task_manager_with_bus.cpp) - manual
   shared-notifier loop for `EventBus` and `TaskManager`.
 - [run_loop.cpp](examples/run_loop.cpp) - convenience `RunLoop` over one bus
@@ -405,19 +420,24 @@ event_hub::TaskManager tasks;
 tasks.set_notifier(&notifier);
 
 while (running) {
+    // Capture the notifier state before processing so wake-ups that arrive
+    // before the wait are still observed.
     const auto generation = notifier.generation();
 
     std::size_t work_done = 0;
     work_done += bus.process();
+    // Bound task work per pass so other passive sources keep getting turns.
     work_done += tasks.process(128);
 
     if (work_done != 0) {
         continue;
     }
 
+    // Sleep for at most 1 ms, or less if a delayed task is due sooner.
     const auto timeout =
-        tasks.recommend_wait_for(std::chrono::milliseconds(1));
+        tasks.recommend_wait_for_ms(1);
     if (!bus.has_pending() && !tasks.has_ready()) {
+        // If the generation changed after processing, this returns immediately.
         notifier.wait_for(generation, timeout);
     }
 }

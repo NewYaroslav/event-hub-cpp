@@ -6,6 +6,7 @@
 /// \brief Defines lightweight move-only task primitives.
 
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <type_traits>
@@ -18,6 +19,87 @@ namespace event_hub {
 /// The value zero is reserved for invalid or rejected submissions.
 using TaskId = std::uint64_t;
 
+class TaskManager;
+
+/// \class TaskContext
+/// \brief Lightweight facade passed to context-aware task callbacks.
+///
+/// TaskContext is valid only while a task callback is running. Operations
+/// return false after the task finishes or when the task state no longer allows
+/// the requested change.
+class TaskContext {
+public:
+    /// \brief Monotonic clock used by TaskManager scheduling.
+    using Clock = std::chrono::steady_clock;
+
+    /// \brief Time point type used for rescheduling.
+    using TimePoint = Clock::time_point;
+
+    /// \brief Duration type used for rescheduling.
+    using Duration = Clock::duration;
+
+    /// \brief Construct an inert context.
+    TaskContext() noexcept = default;
+
+    /// \brief Return the id of the running task, or zero for an inert context.
+    TaskId id() const noexcept {
+        return m_id;
+    }
+
+    /// \brief Cancel future work for the running task.
+    bool cancel() noexcept {
+        return m_cancel && m_owner ? m_cancel(m_owner, m_id) : false;
+    }
+
+    /// \brief Return true when the running task has been cancelled.
+    bool is_cancelled() const noexcept {
+        return m_is_cancelled && m_owner
+                   ? m_is_cancelled(m_owner, m_id)
+                   : false;
+    }
+
+    /// \brief Request the same task to run again at a steady-clock time point.
+    bool reschedule_at(TimePoint due) noexcept {
+        return m_reschedule && m_owner
+                   ? m_reschedule(m_owner, m_id, due)
+                   : false;
+    }
+
+    /// \brief Request the same task to run again after a delay.
+    template <typename Rep, typename Period>
+    bool reschedule_after(
+        const std::chrono::duration<Rep, Period>& delay) noexcept {
+        const auto due =
+            Clock::now() + std::chrono::duration_cast<Duration>(delay);
+        return reschedule_at(due);
+    }
+
+private:
+    using CancelFn = bool (*)(void*, TaskId) noexcept;
+    using IsCancelledFn = bool (*)(void*, TaskId) noexcept;
+    using RescheduleFn = bool (*)(void*, TaskId, TimePoint) noexcept;
+
+    TaskContext(void* owner,
+                TaskId id,
+                CancelFn cancel,
+                IsCancelledFn is_cancelled,
+                RescheduleFn reschedule) noexcept
+        : m_owner(owner),
+          m_id(id),
+          m_cancel(cancel),
+          m_is_cancelled(is_cancelled),
+          m_reschedule(reschedule) {}
+
+private:
+    friend class TaskManager;
+
+    void* m_owner = nullptr;
+    TaskId m_id = 0;
+    CancelFn m_cancel = nullptr;
+    IsCancelledFn m_is_cancelled = nullptr;
+    RescheduleFn m_reschedule = nullptr;
+};
+
 /// \brief Fixed task priority levels.
 enum class TaskPriority : std::uint8_t {
     high = 0,
@@ -29,6 +111,48 @@ enum class TaskPriority : std::uint8_t {
 struct TaskOptions {
     TaskPriority priority{TaskPriority::normal};
 };
+
+/// \brief Scheduling policy used by periodic tasks.
+enum class PeriodicSchedule : std::uint8_t {
+    /// \brief Wait one interval after each callback finishes.
+    fixed_delay = 0,
+
+    /// \brief Schedule each cycle from the previous planned deadline.
+    fixed_rate = 1
+};
+
+/// \brief Options used when submitting a periodic task.
+struct PeriodicTaskOptions {
+    /// \brief Priority used whenever a periodic cycle becomes ready.
+    TaskPriority priority{TaskPriority::normal};
+
+    /// \brief Timing policy used for cycles after the first run.
+    PeriodicSchedule schedule{PeriodicSchedule::fixed_delay};
+};
+
+namespace detail {
+
+template <typename F>
+struct is_no_arg_task_callback
+    : std::integral_constant<
+          bool,
+          std::is_invocable_r<void, typename std::decay<F>::type&>::value> {};
+
+template <typename F>
+struct is_context_task_callback
+    : std::integral_constant<
+          bool,
+          std::is_invocable_r<void,
+                              typename std::decay<F>::type&,
+                              TaskContext&>::value> {};
+
+template <typename F>
+struct is_task_callback
+    : std::integral_constant<bool,
+                             is_no_arg_task_callback<F>::value ||
+                                 is_context_task_callback<F>::value> {};
+
+} // namespace detail
 
 /// \class Task
 /// \brief Move-only type-erased wrapper for a void() callable.
@@ -52,7 +176,14 @@ public:
     /// \brief Construct from std::function for convenience.
     explicit Task(std::function<void()> fn) {
         if (fn) {
-            assign(std::move(fn));
+            assign_no_arg(std::move(fn));
+        }
+    }
+
+    /// \brief Construct from a context-aware std::function for convenience.
+    explicit Task(std::function<void(TaskContext&)> fn) {
+        if (fn) {
+            assign_context(std::move(fn));
         }
     }
 
@@ -65,10 +196,33 @@ public:
                               std::nullptr_t>::value &&
                 !std::is_same<typename std::decay<F>::type,
                               std::function<void()>>::value &&
+                !std::is_same<typename std::decay<F>::type,
+                              std::function<void(TaskContext&)>>::value &&
                 std::is_invocable_r<void, typename std::decay<F>::type&>::value,
             int>::type = 0>
     Task(F&& fn) {
-        assign(std::forward<F>(fn));
+        assign_no_arg(std::forward<F>(fn));
+    }
+
+    /// \brief Construct from any callable invocable as void(TaskContext&).
+    template <
+        typename F,
+        typename std::enable_if<
+            !std::is_same<typename std::decay<F>::type, Task>::value &&
+                !std::is_same<typename std::decay<F>::type,
+                              std::nullptr_t>::value &&
+                !std::is_same<typename std::decay<F>::type,
+                              std::function<void()>>::value &&
+                !std::is_same<typename std::decay<F>::type,
+                              std::function<void(TaskContext&)>>::value &&
+                !std::is_invocable_r<void,
+                                     typename std::decay<F>::type&>::value &&
+                std::is_invocable_r<void,
+                                    typename std::decay<F>::type&,
+                                    TaskContext&>::value,
+            int>::type = 0>
+    Task(F&& fn) {
+        assign_context(std::forward<F>(fn));
     }
 
     /// \brief Return true when this task stores a callable.
@@ -83,7 +237,18 @@ public:
             throw std::bad_function_call();
         }
 
-        m_self->call();
+        TaskContext context;
+        m_self->call(context);
+    }
+
+    /// \brief Invoke the stored callable with a task context.
+    /// \throws std::bad_function_call when the task is empty.
+    void operator()(TaskContext& context) {
+        if (!m_self) {
+            throw std::bad_function_call();
+        }
+
+        m_self->call(context);
     }
 
     /// \brief Reset this task to empty.
@@ -94,16 +259,16 @@ public:
 private:
     struct Concept {
         virtual ~Concept() = default;
-        virtual void call() = 0;
+        virtual void call(TaskContext& context) = 0;
     };
 
     template <typename F>
-    struct Model final : Concept {
+    struct NoArgModel final : Concept {
         template <typename U>
-        explicit Model(U&& fn_)
+        explicit NoArgModel(U&& fn_)
             : fn(std::forward<U>(fn_)) {}
 
-        void call() override {
+        void call(TaskContext&) override {
             fn();
         }
 
@@ -111,9 +276,28 @@ private:
     };
 
     template <typename F>
-    void assign(F&& fn) {
+    struct ContextModel final : Concept {
+        template <typename U>
+        explicit ContextModel(U&& fn_)
+            : fn(std::forward<U>(fn_)) {}
+
+        void call(TaskContext& context) override {
+            fn(context);
+        }
+
+        F fn;
+    };
+
+    template <typename F>
+    void assign_no_arg(F&& fn) {
         using Fn = typename std::decay<F>::type;
-        m_self.reset(new Model<Fn>(std::forward<F>(fn)));
+        m_self.reset(new NoArgModel<Fn>(std::forward<F>(fn)));
+    }
+
+    template <typename F>
+    void assign_context(F&& fn) {
+        using Fn = typename std::decay<F>::type;
+        m_self.reset(new ContextModel<Fn>(std::forward<F>(fn)));
     }
 
 private:

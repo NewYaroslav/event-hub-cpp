@@ -42,7 +42,7 @@ int main() {
         notifier.notify();
 
         EVENT_HUB_TEST_CHECK(notifier.generation() == generation + 1);
-        EVENT_HUB_TEST_CHECK(notifier.wait_for(generation, std::chrono::milliseconds(0)));
+        EVENT_HUB_TEST_CHECK(notifier.wait_for_ms(generation, 0));
         EVENT_HUB_TEST_CHECK(!notifier.wait_for(notifier.generation(),
                                   std::chrono::milliseconds(0)));
     }
@@ -63,7 +63,7 @@ int main() {
         EVENT_HUB_TEST_CHECK(!did_work);
 
         endpoint.post<Ping>(6);
-        EVENT_HUB_TEST_CHECK(notifier.wait_for(generation, std::chrono::milliseconds(0)));
+        EVENT_HUB_TEST_CHECK(notifier.wait_for_ms(generation, 0));
         EVENT_HUB_TEST_CHECK(bus.process() == 1);
         EVENT_HUB_TEST_CHECK(total == 6);
     }

@@ -25,7 +25,8 @@ embedded-style polling code without forcing a thread ownership model.
 Core files:
 
 - `include/event_hub/task.hpp` defines `TaskId`, `TaskPriority`,
-  `TaskOptions`, and move-only `Task`.
+  `TaskOptions`, `PeriodicSchedule`, `PeriodicTaskOptions`, and move-only
+  `Task`.
 - `include/event_hub/task_manager.hpp` defines the passive task queue.
 
 Important choices:
@@ -33,9 +34,16 @@ Important choices:
 - `Task` is a local move-only type erasure wrapper because C++17
   `std::function<void()>` cannot store move-only callables such as lambdas with
   `std::unique_ptr` captures or `std::packaged_task`.
+- `Task` accepts both `void()` and `void(TaskContext&)` callbacks. Use
+  `TaskContext` for self-cancel and explicit reschedule requests, not as an
+  owning task object.
 - Ready tasks use three FIFO `std::deque` queues: high, normal, low.
-- Delayed tasks use a min-heap ordered by `std::chrono::steady_clock`
-  deadlines and a sequence number for stable ordering.
+- Delayed and not-yet-ready periodic tasks use a min-heap ordered by
+  `std::chrono::steady_clock` deadlines and a sequence number for stable
+  ordering.
+- Periodic tasks keep one `TaskId` for the full series. They may be scheduled
+  as fixed-delay or fixed-rate work, and the first cycle is ready immediately
+  unless the caller provides an initial delay.
 - Cancellation is lazy: `TaskId` maps to an atomic task state, and containers
   are pruned or skipped later. Do not add eager O(n) removal as the main path.
 - `TaskId` values are monotonic within one manager lifetime; `0` means invalid
@@ -45,10 +53,43 @@ Important choices:
 - User callbacks must never run while the queue mutex is held.
 - Without an exception handler, `process()` restores unstarted work from the
   current batch and rethrows. With a handler, it reports and continues.
+  Periodic tasks stop after a callback exception in both modes.
 
-Do not add periodic tasks to the core. Fixed-rate, fixed-delay, catch-up, and
-exception policies are application decisions. Build repeating work with
-self-rescheduling delayed tasks.
+## TaskContext Rules
+
+`TaskContext` is opt-in. Keep ordinary `void()` callbacks for simple work, and
+use `void(event_hub::TaskContext&)` only when the callback needs the running
+task id, self-cancel, or explicit rescheduling.
+
+Supported scheduling APIs:
+
+- `post`, `post_after`, `post_after_ms`, and `post_at` accept context-aware
+  callables.
+- `post_every`, `post_every_after`, `post_every_ms`, and
+  `post_every_after_ms` accept context-aware callables.
+- `post_batch(std::vector<Task>)` accepts context-aware tasks when they are
+  constructed as `Task([](TaskContext& self) { ... })`.
+- `submit()` intentionally stays no-context because it wraps a
+  `std::packaged_task` and returns a future result.
+
+Runtime semantics:
+
+- A context is valid only while its callback is running. Do not store it as a
+  long-lived handle; operations on a copied context after the callback returns
+  must be expected to return `false`.
+- `self.id()` is the stable `TaskId` for that one-shot task or the whole
+  periodic series.
+- `self.cancel()` does not interrupt the current callback. It cancels future
+  periodic cycles or any reschedule requested by the current one-shot callback.
+- If `self.cancel()` and `self.reschedule_at/after()` are both called in one
+  callback, cancellation wins.
+- One-shot `self.reschedule_at/after()` requeues the same callback with the same
+  `TaskId`. Periodic explicit reschedule overrides only the next cycle; after
+  that cycle, fixed-delay or fixed-rate scheduling continues normally.
+- A due time in the past becomes ready for a later `process()` call, preserving
+  snapshot semantics. It must not run again in the same snapshot batch.
+- If the callback throws, any requested reschedule is ignored and the normal
+  `TaskManager` exception policy applies.
 
 ## Correct Manual Loop
 
@@ -112,6 +153,10 @@ examples only when demonstrating the convenience helper itself.
 - Use `submit()` when a task result is needed through `std::future`.
 - Use `post_batch()` when a producer has several immediate tasks and should
   wake the loop once.
+- Use `post_every(...)` / `post_every_after(...)` for lightweight repeating
+  work. Prefer fixed-delay unless the caller needs planned-deadline timing.
+- Prefer `TaskContext&` callbacks when a task needs to cancel or reschedule
+  itself; avoid awkward `TaskId` capture patterns in examples.
 - Keep task callbacks short; publish events or enqueue follow-up tasks for
   larger workflows.
 - Treat `process()`, `clear_pending()`, `close()`, and destruction as
@@ -122,9 +167,12 @@ examples only when demonstrating the convenience helper itself.
 Task-related changes should cover:
 
 - immediate and delayed execution;
+- periodic fixed-delay and fixed-rate execution;
+- context-aware callbacks, including self-cancel and one-shot reschedule;
 - priority ordering and FIFO within one priority;
 - snapshot semantics for tasks posted by callbacks;
-- cancellation before start and rejection after start;
+- cancellation before start, between periodic cycles, from inside a periodic
+  callback, and rejection after one-shot start;
 - exception handler and fail-fast restore behavior;
 - notifier wakeups and `recommend_wait_for(...)`;
 - `submit()` futures and move-only task captures;

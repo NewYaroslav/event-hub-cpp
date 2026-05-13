@@ -78,8 +78,7 @@ int main() {
         event_hub::EventBus bus;
         event_hub::EventEndpoint endpoint(bus);
         bool timed_out = false;
-        event_hub::AwaitOptions options;
-        options.timeout = std::chrono::milliseconds(1);
+        auto options = event_hub::AwaitOptions::timeout_ms(1);
         options.on_timeout = [&timed_out] {
             timed_out = true;
         };
@@ -151,7 +150,7 @@ int main() {
         });
 
         event_hub::AwaitOptions options;
-        options.timeout = std::chrono::milliseconds(1);
+        options.set_timeout_ms(1);
         options.on_timeout = [] {
             throw std::runtime_error("timeout failed");
         };

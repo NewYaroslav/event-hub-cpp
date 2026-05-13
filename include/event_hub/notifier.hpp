@@ -85,6 +85,11 @@ public:
         });
     }
 
+    /// \brief Wait until the generation changes or timeout_ms expires.
+    bool wait_for_ms(std::uint64_t old_generation, std::int64_t timeout_ms) {
+        return wait_for(old_generation, std::chrono::milliseconds(timeout_ms));
+    }
+
 private:
     mutable std::mutex m_mutex;
     std::condition_variable m_cv;

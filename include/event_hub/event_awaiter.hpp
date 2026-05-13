@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -26,6 +27,19 @@ struct AwaitOptions {
     std::chrono::steady_clock::duration timeout{}; ///< Zero means no timeout.
     CancellationToken token{};                     ///< Empty means no token.
     std::function<void()> on_timeout{};            ///< Called when timeout ends.
+
+    /// \brief Create options with a timeout in milliseconds.
+    static AwaitOptions timeout_ms(std::int64_t timeout_ms) {
+        AwaitOptions options;
+        options.set_timeout_ms(timeout_ms);
+        return options;
+    }
+
+    /// \brief Set timeout to timeout_ms milliseconds.
+    AwaitOptions& set_timeout_ms(std::int64_t timeout_ms) {
+        timeout = std::chrono::milliseconds(timeout_ms);
+        return *this;
+    }
 };
 
 /// \class EventAwaiter

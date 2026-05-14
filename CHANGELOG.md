@@ -24,6 +24,21 @@ All notable changes to this project will be documented in this file.
 - Added periodic `TaskManager` scheduling with fixed-delay and fixed-rate
   policies, optional initial delay, cancellation through `TaskId`, and tests.
 - Added `TaskContext` callbacks for task self-cancel and explicit reschedule.
+- Added `TaskManager::add_task_at(...)` as an explicit steady-clock deadline
+  alias for `post_at(...)`.
+- Added `TaskManager::add_task_at_system(...)` for one-shot wall-clock
+  submissions that are converted to steady deadlines at scheduling time.
+- Added `TaskManager::add_task_at_system_ms(...)` for one-shot wall-clock
+  submissions represented as Unix epoch milliseconds.
+- Added optional `time-shield-cpp` submodule integration for calendar-time
+  scheduling utilities, disabled by default.
+- Added optional `CalendarScheduler` daily, weekly, monthly, and custom
+  calendar rules over `TaskManager` when `EVENT_HUB_CPP_USE_TIME_SHIELD=ON`.
+- Added `CalendarTaskOptions` helpers for named zones, fixed UTC offsets,
+  caller-provided `time_shield::ZonedClock` instances, and custom UTC
+  millisecond providers.
+- Added CalendarScheduler examples for NTP-backed time and custom time around a
+  winter-time transition.
 
 ## [v0.1.0] - 2026-05-12
 - Added the initial header-only C++17 event bus API with typed subscriptions,

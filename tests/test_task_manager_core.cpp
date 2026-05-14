@@ -190,13 +190,108 @@ int main() {
             event_hub::Task([&value] {
                 value += 4;
             }));
+        const auto id4 = tasks.add_task_at(
+            event_hub::TaskManager::Clock::now() -
+                std::chrono::milliseconds(1),
+            [&value] {
+                value += 8;
+            });
 
         EVENT_HUB_TEST_CHECK(id1 != 0);
         EVENT_HUB_TEST_CHECK(id2 != 0);
         EVENT_HUB_TEST_CHECK(id3 != 0);
-        EVENT_HUB_TEST_CHECK(tasks.ready_count() == 3);
-        EVENT_HUB_TEST_CHECK(tasks.process() == 3);
-        EVENT_HUB_TEST_CHECK(value == 7);
+        EVENT_HUB_TEST_CHECK(id4 != 0);
+        EVENT_HUB_TEST_CHECK(tasks.ready_count() == 4);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 4);
+        EVENT_HUB_TEST_CHECK(value == 15);
+    }
+
+    {
+        event_hub::TaskManager tasks;
+        int value = 0;
+
+        const auto id = tasks.add_task_at_system(
+            event_hub::TaskManager::SystemClock::now() +
+                std::chrono::milliseconds(30),
+            [&value] {
+                ++value;
+            });
+
+        EVENT_HUB_TEST_CHECK(id != 0);
+        EVENT_HUB_TEST_CHECK(tasks.pending_count() == 1);
+        EVENT_HUB_TEST_CHECK(tasks.next_deadline());
+        EVENT_HUB_TEST_CHECK(tasks.recommend_wait_for_ms(100) >
+               event_hub::TaskManager::Duration::zero());
+        EVENT_HUB_TEST_CHECK(tasks.process() == 0);
+        EVENT_HUB_TEST_CHECK(value == 0);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(value == 1);
+        EVENT_HUB_TEST_CHECK(!tasks.has_pending());
+    }
+
+    {
+        event_hub::TaskManager tasks;
+        event_hub::TaskId seen_id = 0;
+
+        const auto id = tasks.add_task_at_system(
+            event_hub::TaskManager::SystemClock::now() -
+                std::chrono::milliseconds(1),
+            [&seen_id](event_hub::TaskContext& self) {
+                seen_id = self.id();
+            });
+
+        EVENT_HUB_TEST_CHECK(id != 0);
+        EVENT_HUB_TEST_CHECK(tasks.ready_count() == 1);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(seen_id == id);
+        EVENT_HUB_TEST_CHECK(!tasks.has_pending());
+    }
+
+    {
+        event_hub::TaskManager tasks;
+        int value = 0;
+
+        const auto due_ms = std::chrono::duration_cast<
+            std::chrono::milliseconds>(
+                (event_hub::TaskManager::SystemClock::now() +
+                 std::chrono::milliseconds(30)).time_since_epoch())
+                                .count();
+        const auto id = tasks.add_task_at_system_ms(due_ms, [&value] {
+            ++value;
+        });
+
+        EVENT_HUB_TEST_CHECK(id != 0);
+        EVENT_HUB_TEST_CHECK(tasks.next_deadline());
+        EVENT_HUB_TEST_CHECK(tasks.recommend_wait_for_ms(100) >
+               event_hub::TaskManager::Duration::zero());
+        EVENT_HUB_TEST_CHECK(tasks.process() == 0);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(value == 1);
+    }
+
+    {
+        event_hub::TaskManager tasks;
+        event_hub::TaskId seen_id = 0;
+
+        const auto due_ms = std::chrono::duration_cast<
+            std::chrono::milliseconds>(
+                (event_hub::TaskManager::SystemClock::now() -
+                 std::chrono::milliseconds(1)).time_since_epoch())
+                                .count();
+        const auto id = tasks.add_task_at_system_ms(
+            due_ms,
+            [&seen_id](event_hub::TaskContext& self) {
+                seen_id = self.id();
+            });
+
+        EVENT_HUB_TEST_CHECK(id != 0);
+        EVENT_HUB_TEST_CHECK(tasks.ready_count() == 1);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 1);
+        EVENT_HUB_TEST_CHECK(seen_id == id);
     }
 
     {
@@ -219,20 +314,26 @@ int main() {
             [&seen](event_hub::TaskContext& self) {
                 seen.push_back(self.id());
             });
-        const auto id4 = tasks.post_every(
+        const auto id4 = tasks.add_task_at(
+            event_hub::TaskManager::Clock::now() -
+                std::chrono::milliseconds(1),
+            [&seen](event_hub::TaskContext& self) {
+                seen.push_back(self.id());
+            });
+        const auto id5 = tasks.post_every(
             std::chrono::milliseconds(100),
             [&seen](event_hub::TaskContext& self) {
                 seen.push_back(self.id());
                 EVENT_HUB_TEST_CHECK(self.cancel());
             });
-        const auto id5 = tasks.post_every_after(
+        const auto id6 = tasks.post_every_after(
             std::chrono::milliseconds(-1),
             std::chrono::milliseconds(100),
             [&seen](event_hub::TaskContext& self) {
                 seen.push_back(self.id());
                 EVENT_HUB_TEST_CHECK(self.cancel());
             });
-        const auto id6 = tasks.post_every_after_ms(
+        const auto id7 = tasks.post_every_after_ms(
             -1,
             100,
             [&seen](event_hub::TaskContext& self) {
@@ -246,9 +347,10 @@ int main() {
         EVENT_HUB_TEST_CHECK(id4 != 0);
         EVENT_HUB_TEST_CHECK(id5 != 0);
         EVENT_HUB_TEST_CHECK(id6 != 0);
-        EVENT_HUB_TEST_CHECK(tasks.process() == 6);
+        EVENT_HUB_TEST_CHECK(id7 != 0);
+        EVENT_HUB_TEST_CHECK(tasks.process() == 7);
         EVENT_HUB_TEST_CHECK((seen == std::vector<event_hub::TaskId>{
-            id1, id2, id3, id4, id5, id6}));
+            id1, id2, id3, id4, id5, id6, id7}));
         EVENT_HUB_TEST_CHECK(!tasks.has_pending());
     }
 

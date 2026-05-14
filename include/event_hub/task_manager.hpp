@@ -47,8 +47,14 @@ public:
     /// \brief Monotonic clock used for delayed tasks.
     using Clock = std::chrono::steady_clock;
 
+    /// \brief Wall-clock type accepted by add_task_at_system().
+    using SystemClock = std::chrono::system_clock;
+
     /// \brief Time point type used by delayed tasks.
     using TimePoint = Clock::time_point;
+
+    /// \brief Wall-clock time point converted to a steady deadline on submit.
+    using SystemTimePoint = SystemClock::time_point;
 
     /// \brief Duration type used by delayed tasks.
     using Duration = Clock::duration;
@@ -388,6 +394,92 @@ public:
             int>::type = 0>
     TaskId post_at(TimePoint due, F&& fn, TaskOptions options = {}) {
         return post_at(due, Task(std::forward<F>(fn)), options);
+    }
+
+    /// \brief Submit a task to run at a steady-clock deadline.
+    ///
+    /// Alias for post_at() using explicit task/deadline naming. The deadline is
+    /// monotonic, not a wall-clock calendar time.
+    ///
+    /// \return The task id, or zero when the task is empty or the manager is
+    /// closed.
+    TaskId add_task_at(TimePoint deadline,
+                       Task task,
+                       TaskOptions options = {}) {
+        return post_at(deadline, std::move(task), options);
+    }
+
+    /// \brief Submit a callable to run at a steady-clock deadline.
+    template <
+        typename F,
+        typename std::enable_if<
+            !std::is_same<typename std::decay<F>::type, Task>::value &&
+                detail::is_task_callback<F>::value,
+            int>::type = 0>
+    TaskId add_task_at(TimePoint deadline,
+                       F&& fn,
+                       TaskOptions options = {}) {
+        return add_task_at(deadline, Task(std::forward<F>(fn)), options);
+    }
+
+    /// \brief Submit a task to run at a system-clock time point.
+    ///
+    /// The system-clock time is converted to a steady-clock deadline when this
+    /// function is called. Later system clock changes do not move the task.
+    ///
+    /// \return The task id, or zero when the task is empty or the manager is
+    /// closed.
+    TaskId add_task_at_system(SystemTimePoint time,
+                              Task task,
+                              TaskOptions options = {}) {
+        const auto delay =
+            std::chrono::duration_cast<Duration>(time - SystemClock::now());
+        const auto deadline = Clock::now() + delay;
+        return post_at(deadline, std::move(task), options);
+    }
+
+    /// \brief Submit a callable to run at a system-clock time point.
+    template <
+        typename F,
+        typename std::enable_if<
+            !std::is_same<typename std::decay<F>::type, Task>::value &&
+                detail::is_task_callback<F>::value,
+            int>::type = 0>
+    TaskId add_task_at_system(SystemTimePoint time,
+                              F&& fn,
+                              TaskOptions options = {}) {
+        return add_task_at_system(time,
+                                  Task(std::forward<F>(fn)),
+                                  options);
+    }
+
+    /// \brief Submit a task at a Unix epoch time in milliseconds.
+    ///
+    /// The millisecond timestamp is interpreted as system-clock time and is
+    /// converted to a steady-clock deadline when this function is called.
+    TaskId add_task_at_system_ms(std::int64_t unix_time_ms,
+                                 Task task,
+                                 TaskOptions options = {}) {
+        const auto duration = std::chrono::duration_cast<
+            SystemClock::duration>(std::chrono::milliseconds(unix_time_ms));
+        return add_task_at_system(SystemTimePoint(duration),
+                                  std::move(task),
+                                  options);
+    }
+
+    /// \brief Submit a callable at a Unix epoch time in milliseconds.
+    template <
+        typename F,
+        typename std::enable_if<
+            !std::is_same<typename std::decay<F>::type, Task>::value &&
+                detail::is_task_callback<F>::value,
+            int>::type = 0>
+    TaskId add_task_at_system_ms(std::int64_t unix_time_ms,
+                                 F&& fn,
+                                 TaskOptions options = {}) {
+        return add_task_at_system_ms(unix_time_ms,
+                                     Task(std::forward<F>(fn)),
+                                     options);
     }
 
     /// \brief Submit a batch of immediate tasks with one notification.

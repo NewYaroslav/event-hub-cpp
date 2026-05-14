@@ -16,6 +16,12 @@ endif()
 
 option(EVENT_HUB_CPP_BUILD_EXAMPLES "Build event-hub-cpp examples" ${EVENT_HUB_CPP_TOP_LEVEL})
 option(EVENT_HUB_CPP_BUILD_TESTS "Build event-hub-cpp tests" ${EVENT_HUB_CPP_TOP_LEVEL})
+option(EVENT_HUB_CPP_USE_TIME_SHIELD "Enable optional time-shield-cpp integration" OFF)
+option(EVENT_HUB_CPP_USE_TIME_SHIELD_NTP "Enable time-shield-cpp NTP support" OFF)
+set(EVENT_HUB_CPP_TIME_SHIELD_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/time-shield-cpp
+    CACHE PATH "Path to the optional time-shield-cpp submodule"
+)
 set(EVENT_HUB_CPP_TEST_TIMEOUT_SECONDS
     15
     CACHE STRING "Per-test timeout for event-hub-cpp CTest tests"
@@ -33,6 +39,62 @@ target_include_directories(event_hub_cpp
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+
+if(EVENT_HUB_CPP_USE_TIME_SHIELD)
+    if(CMAKE_VERSION VERSION_LESS 3.15)
+        message(FATAL_ERROR
+            "EVENT_HUB_CPP_USE_TIME_SHIELD requires CMake 3.15 or newer "
+            "because external/time-shield-cpp requires it."
+        )
+    endif()
+
+    if(NOT EXISTS "${EVENT_HUB_CPP_TIME_SHIELD_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "EVENT_HUB_CPP_USE_TIME_SHIELD=ON requires the "
+            "external/time-shield-cpp submodule. Run: "
+            "git submodule update --init --recursive external/time-shield-cpp"
+        )
+    endif()
+
+    set(TIME_SHIELD_ENABLE_NTP_CLIENT
+        ${EVENT_HUB_CPP_USE_TIME_SHIELD_NTP}
+        CACHE BOOL "Enable time-shield-cpp NTP client" FORCE
+    )
+    set(TIME_SHIELD_CPP_BUILD_EXAMPLES
+        OFF
+        CACHE BOOL "Build Time Shield examples" FORCE
+    )
+    set(TIME_SHIELD_CPP_BUILD_TESTS
+        OFF
+        CACHE BOOL "Build Time Shield tests" FORCE
+    )
+
+    add_subdirectory(
+        ${EVENT_HUB_CPP_TIME_SHIELD_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}/external/time-shield-cpp
+    )
+    target_link_libraries(event_hub_cpp INTERFACE time_shield::time_shield)
+    target_compile_definitions(event_hub_cpp
+        INTERFACE
+            EVENT_HUB_CPP_USE_TIME_SHIELD=1
+    )
+
+    if(EVENT_HUB_CPP_USE_TIME_SHIELD_NTP)
+        target_compile_definitions(event_hub_cpp
+            INTERFACE EVENT_HUB_CPP_USE_TIME_SHIELD_NTP=1)
+    else()
+        target_compile_definitions(event_hub_cpp
+            INTERFACE EVENT_HUB_CPP_USE_TIME_SHIELD_NTP=0)
+    endif()
+else()
+    target_compile_definitions(event_hub_cpp
+        INTERFACE
+            EVENT_HUB_CPP_USE_TIME_SHIELD=0
+            EVENT_HUB_CPP_USE_TIME_SHIELD_NTP=0
+    )
+endif()
+
+set(EVENT_HUB_CPP_CONFIG_USES_TIME_SHIELD ${EVENT_HUB_CPP_USE_TIME_SHIELD})
 
 if(MSVC)
     set(EVENT_HUB_CPP_WARNING_FLAGS /W4)

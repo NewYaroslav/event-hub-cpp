@@ -1,5 +1,11 @@
 @PACKAGE_INIT@
 
+include(CMakeFindDependencyMacro)
+
+if(@EVENT_HUB_CPP_CONFIG_USES_TIME_SHIELD@)
+    find_dependency(TimeShield CONFIG)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/event-hub-cppTargets.cmake")
 
 if(NOT TARGET event-hub-cpp::event-hub-cpp AND TARGET event_hub::event_hub)

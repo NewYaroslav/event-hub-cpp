@@ -39,6 +39,9 @@ Core vocabulary:
   its id, cancel future work, or request rescheduling.
 - `TaskManager` - optional passive queue for immediate, delayed one-shot, and
   periodic tasks processed by an application thread.
+- `CalendarScheduler` - optional `time-shield-cpp` layer that computes
+  daily/weekly/monthly/custom calendar times and delegates execution to
+  `TaskManager`.
 - `RunLoop` - optional blocking helper that processes any number of registered
   `EventBus` and `TaskManager` instances on the calling thread.
 - `Module` - `EventNode` plus an owned `TaskManager` and explicit
@@ -227,10 +230,23 @@ Important design points:
 
 - `TaskManager` is passive and header-only. It does not own a thread, sleep by
   itself, or expose `run()`/`join()` APIs.
-- Producers may call `post`, `post_after`, `post_at`, `post_every`,
-  `post_every_after`, `post_batch`, `submit`, and `cancel` from other threads.
-  `process`, `clear_pending`, `close`, and destruction remain
+- Producers may call `post`, `post_after`, `post_at`, `add_task_at`,
+  `post_every`, `post_every_after`, `post_batch`, `submit`, and `cancel` from
+  other threads. `process`, `clear_pending`, `close`, and destruction remain
   single-consumer/lifetime operations.
+- `post_at(...)` and `add_task_at(...)` schedule against
+  `TaskManager::TimePoint`, a `std::chrono::steady_clock::time_point`. Treat it
+  as a monotonic deadline for retry, timeout, reconnect, polling, debounce, and
+  `next_deadline()` loops; do not describe it as a wall-clock date/time API.
+- `add_task_at_system(...)` accepts `std::chrono::system_clock::time_point` and
+  converts it once to a steady deadline at scheduling time. It does not move if
+  the system clock changes later. `add_task_at_system_ms(...)` is the same API
+  shape for Unix epoch milliseconds.
+- Calendar rules such as daily, weekly, monthly, or timezone-aware schedules
+  live in the optional `CalendarScheduler` layer over `TaskManager`, backed by
+  `time-shield-cpp` only when `EVENT_HUB_CPP_USE_TIME_SHIELD=ON`. It computes
+  UTC Unix-millisecond planned times, then queues one steady-clock task at a
+  time.
 - `Task` exists because C++17 `std::function<void()>` cannot store move-only
   callables. It also supports `void(TaskContext&)` callbacks for self-cancel
   and reschedule. Keep this wrapper small and dependency-free.

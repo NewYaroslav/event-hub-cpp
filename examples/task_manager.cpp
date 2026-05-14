@@ -1,5 +1,6 @@
 #include <event_hub.hpp>
 
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -31,7 +32,22 @@ int main() {
         log.push_back("delayed task");
     });
 
-    tasks.post_after_ms(4, [&running] {
+    tasks.add_task_at(
+        event_hub::TaskManager::Clock::now() + std::chrono::milliseconds(3),
+        [&log] {
+            log.push_back("deadline task");
+        });
+
+    const auto system_deadline_ms = std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            (event_hub::TaskManager::SystemClock::now() +
+             std::chrono::milliseconds(4)).time_since_epoch())
+                                    .count();
+    tasks.add_task_at_system_ms(system_deadline_ms, [&log] {
+        log.push_back("system-time task");
+    });
+
+    tasks.post_after_ms(6, [&running] {
         running = false;
     });
 

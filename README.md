@@ -29,6 +29,8 @@ Key characteristics:
 - `post<T>()` queues work for an explicit `process()` point.
 - Optional `TaskManager` queues immediate, delayed, periodic, and
   future-returning tasks for the same explicit processing model.
+- Optional `CalendarScheduler` adds daily, weekly, monthly, and custom
+  calendar rules when `time-shield-cpp` integration is enabled.
 - Optional `RunLoop` blocks the calling thread while processing any number of
   event buses and task managers.
 - Optional external notifiers wake application event loops after queued work is
@@ -37,13 +39,13 @@ Key characteristics:
 - `CancellationToken` and `CancellationSource` cancel awaiters.
 - Lifetime guards prevent callbacks from starting after their guarded owner
   expires.
-- Header-only C++17 with no external dependencies.
+- Header-only C++17 with no required external dependencies.
 
 ## Header Layout
 
 | Header | Purpose |
 | --- | --- |
-| `<event_hub.hpp>` | Primary umbrella header for the full public API. |
+| `<event_hub.hpp>` | Primary umbrella header for the dependency-free public API. |
 | `<event_hub/event_bus.hpp>` | Central bus, subscriptions, `emit`, `post`, and `process`. |
 | `<event_hub/event_endpoint.hpp>` | RAII module endpoint for subscriptions and awaiters. |
 | `<event_hub/event_node.hpp>` | Convenience base class for modules that own an endpoint and listen through `EventListener`. |
@@ -56,6 +58,7 @@ Key characteristics:
 | `<event_hub/run_loop.hpp>` | Blocking current-thread loop for registered buses and task managers. |
 | `<event_hub/task.hpp>` | Move-only `Task`, `TaskContext`, `TaskId`, priority, periodic policy, and task options. |
 | `<event_hub/task_manager.hpp>` | Passive `TaskManager` for immediate, delayed, and periodic task processing. |
+| `<event_hub/calendar_scheduler.hpp>` | Optional `time-shield-cpp` calendar scheduler layer for daily/weekly/monthly rules. |
 
 ## Quick Start
 
@@ -193,6 +196,18 @@ fixed `high`, `normal`, or `low` priorities while preserving FIFO order inside
 each priority. `Task` is move-only, so C++17 code can queue lambdas that capture
 move-only values.
 
+For a monotonic absolute deadline, use `add_task_at(...)` or `post_at(...)` with
+`TaskManager::TimePoint` (`std::chrono::steady_clock::time_point`). This is not
+a calendar date; it is stable against system clock and DST changes, and works
+well with `next_deadline()`.
+
+For a simple wall-clock submission, use `add_task_at_system(...)` with
+`std::chrono::system_clock::time_point`. It converts the system time to a
+steady-clock deadline at scheduling time and does not track later system clock
+changes, so it is not a full calendar scheduler. Use
+`add_task_at_system_ms(...)` when the same wall-clock deadline is represented as
+Unix epoch milliseconds.
+
 Periodic tasks run only from `process()`. By default, the first cycle is ready
 immediately, then later cycles use fixed-delay scheduling. Use
 `post_every_after(...)` or `post_every_after_ms(...)` to delay the first cycle,
@@ -206,6 +221,47 @@ Task callbacks may also accept `event_hub::TaskContext&`. The context exposes
 the running task id, `cancel()`, and `reschedule_at(...)` /
 `reschedule_after(...)`, which is useful for self-cancelling periodic work or
 retry-like one-shot tasks without capturing a `TaskId`.
+
+When configured with `-DEVENT_HUB_CPP_USE_TIME_SHIELD=ON`, the optional
+`<event_hub/calendar_scheduler.hpp>` header adds daily, weekly, monthly, and
+custom calendar rules over `TaskManager`. It computes the next UTC calendar occurrence with
+`time-shield-cpp`, submits one steady-clock task, and schedules the next one
+after the callback completes. The default zone is UTC/GMT; options provide a
+`time_shield::ZonedClock`, a UTC millisecond `now_provider`, missed-run and
+overlap policies, persisted `last_due_utc_ms`, and observer callbacks for
+created/scheduled/due/callback/missed/cancelled events. Convenience helpers
+such as `CalendarTaskOptions::in_zone(...)`,
+`CalendarTaskOptions::fixed_utc_offset(...)`, and
+`CalendarTaskOptions::with_clock(...)` configure common clock sources. To use
+time-shield NTP, pass a `time_shield::ZonedClock(zone, true)` in an
+NTP-enabled build. For named zones, local times that fall into DST gaps are
+skipped, and ambiguous DST-fold local times are scheduled once at the first UTC
+occurrence.
+
+Use `time_of_day(...)` for readable wall-clock times and fluent schedule
+builders for multi-day rules. It creates a time inside the configured calendar
+day, not the host machine's current local time. CalendarScheduler uses second
+granularity for daily/weekly/monthly rules, so a nonzero millisecond argument
+is rejected by those APIs:
+
+```cpp
+calendar.add_daily_task(event_hub::time_of_day(18, 30), [] {});
+
+auto weekly = event_hub::WeeklySchedule{}
+    .add(event_hub::MON, event_hub::time_of_day(9, 0))
+    .add(event_hub::FRI, event_hub::time_of_day(18, 0));
+calendar.add_weekly_task(std::move(weekly), [] {});
+
+auto monthly = event_hub::MonthlySchedule{}
+    .add(15, event_hub::time_of_day(12, 0));
+calendar.add_monthly_task(std::move(monthly), [] {});
+```
+
+`TaskManager` must outlive `CalendarScheduler`. Scheduler destruction cancels
+queued one-shot tasks but does not wait for callbacks that already started.
+Observers may be called from `cancel()`, `cancel_all()`, and destruction, so
+callbacks and observers that capture external objects must guard those
+objects' lifetimes.
 
 ## RunLoop
 
@@ -330,10 +386,14 @@ c++ main.cpp -std=c++17 $(pkg-config --cflags --libs event-hub-cpp)
 ### Integration Notes
 
 - `event_hub::event_hub` is a header-only target and has no external
-  dependencies.
+  dependencies by default.
 - Consumers need a C++17 or newer toolchain.
 - When used via `add_subdirectory`, examples and tests are disabled by default
   unless `event-hub-cpp` is the top-level project.
+- Optional `CalendarScheduler` utilities use `time-shield-cpp` from the
+  `external/time-shield-cpp` submodule when configured with
+  `-DEVENT_HUB_CPP_USE_TIME_SHIELD=ON`. NTP support is off by default; enable
+  it with `-DEVENT_HUB_CPP_USE_TIME_SHIELD_NTP=ON`.
 
 ## Build And Test
 
@@ -395,6 +455,16 @@ the vcpkg overlay port on Linux.
   periodic `TaskManager` work with immediate start, delayed first cycle,
   fixed-delay/fixed-rate scheduling, context self-cancel, self-reschedule, and
   handled failures.
+- [calendar_scheduler.cpp](examples/calendar_scheduler.cpp) - optional
+  `CalendarScheduler` rules over `TaskManager`; requires
+  `EVENT_HUB_CPP_USE_TIME_SHIELD=ON` for the full example.
+- [calendar_scheduler_ntp.cpp](examples/calendar_scheduler_ntp.cpp) -
+  NTP-backed `CalendarScheduler` configuration through time-shield; requires
+  `EVENT_HUB_CPP_USE_TIME_SHIELD=ON` and
+  `EVENT_HUB_CPP_USE_TIME_SHIELD_NTP=ON`.
+- [calendar_scheduler_custom_time.cpp](examples/calendar_scheduler_custom_time.cpp) -
+  custom UTC millisecond time provider with a CET rule around the winter-time
+  transition.
 - [task_manager_with_bus.cpp](examples/task_manager_with_bus.cpp) - manual
   shared-notifier loop for `EventBus` and `TaskManager`.
 - [run_loop.cpp](examples/run_loop.cpp) - convenience `RunLoop` over one bus

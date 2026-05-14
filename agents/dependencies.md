@@ -10,6 +10,12 @@
 - CMake should consume local dependencies from `external/` during normal builds,
   not download them on demand.
 - Do not edit submodules unless the task explicitly asks for dependency work.
+- `time-shield-cpp` is the approved optional dependency for calendar-time
+  scheduling utilities. Keep it under `external/time-shield-cpp`, consume it
+  only when `EVENT_HUB_CPP_USE_TIME_SHIELD=ON`, and leave NTP disabled unless
+  `EVENT_HUB_CPP_USE_TIME_SHIELD_NTP=ON`. The only public layer that should use
+  it directly is `CalendarScheduler`; `TaskManager` must remain a steady-clock
+  executor.
 
 ## Standard Library Baseline
 

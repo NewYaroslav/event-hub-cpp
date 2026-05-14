@@ -28,6 +28,8 @@
 - `post<T>()` кладет событие в очередь до явного `process()`.
 - Опциональный `TaskManager` кладет immediate, delayed, periodic и
   future-returning задачи в ту же модель явной обработки.
+- Опциональный `CalendarScheduler` добавляет daily, weekly, monthly и custom
+  calendar rules, если включена интеграция с `time-shield-cpp`.
 - Опциональный `RunLoop` блокирует текущий поток и обрабатывает любое число
   event bus-ов и task manager-ов.
 - Опциональные внешние notifier-ы будят application event loop после появления
@@ -35,13 +37,13 @@
 - `await_once()` и `await_each()` дают callback-ожидание событий.
 - `CancellationToken` и `CancellationSource` отменяют awaiter-ы.
 - Lifetime guard-ы не дают callback-у стартовать после истечения guarded owner-а.
-- Header-only C++17 без внешних зависимостей.
+- Header-only C++17 без обязательных внешних зависимостей.
 
 ## Структура Заголовков
 
 | Заголовок | Назначение |
 | --- | --- |
-| `<event_hub.hpp>` | Основной общий заголовок для всего публичного API. |
+| `<event_hub.hpp>` | Основной общий заголовок для dependency-free публичного API. |
 | `<event_hub/event_bus.hpp>` | Центральная шина, подписки, `emit`, `post` и `process`. |
 | `<event_hub/event_endpoint.hpp>` | RAII-точка подключения модуля к шине. |
 | `<event_hub/event_awaiter.hpp>` | Реализация awaiter-ов и `AwaitOptions`. |
@@ -53,6 +55,7 @@
 | `<event_hub/run_loop.hpp>` | Блокирующий current-thread loop для зарегистрированных шин и task manager-ов. |
 | `<event_hub/task.hpp>` | Move-only `Task`, `TaskContext`, `TaskId`, приоритет, periodic policy и опции задач. |
 | `<event_hub/task_manager.hpp>` | Пассивный `TaskManager` для immediate, delayed и periodic задач. |
+| `<event_hub/calendar_scheduler.hpp>` | Опциональный calendar scheduler на `time-shield-cpp` для daily/weekly/monthly правил. |
 
 ## Быстрый Старт
 
@@ -156,6 +159,19 @@ assert(future.get() == 42);
 внутри одного приоритета. `Task` является move-only, поэтому в C++17 можно
 ставить в очередь lambda с move-only захватами.
 
+Для абсолютного монотонного дедлайна используйте `add_task_at(...)` или
+`post_at(...)` с `TaskManager::TimePoint`
+(`std::chrono::steady_clock::time_point`). Это не календарная дата, а deadline,
+устойчивый к изменению системного времени и DST; он хорошо сочетается с
+`next_deadline()`.
+
+Для простой постановки по wall-clock времени используйте
+`add_task_at_system(...)` с `std::chrono::system_clock::time_point`. Метод
+конвертирует system time в steady-clock deadline в момент постановки и не
+отслеживает последующие изменения системного времени, поэтому это не
+полноценный календарный scheduler. Используйте `add_task_at_system_ms(...)`,
+если тот же wall-clock deadline представлен Unix epoch миллисекундами.
+
 Periodic-задачи выполняются только из `process()`. По умолчанию первый цикл
 становится ready сразу, а следующие циклы используют fixed-delay scheduling.
 Используйте `post_every_after(...)` или `post_every_after_ms(...)`, чтобы
@@ -170,6 +186,46 @@ Task callback-и также могут принимать `event_hub::TaskContex
 id текущей задачи, `cancel()` и `reschedule_at(...)` / `reschedule_after(...)`;
 это удобно для self-cancel periodic-задач и retry-like one-shot задач без
 захвата `TaskId`.
+
+Если проект собран с `-DEVENT_HUB_CPP_USE_TIME_SHIELD=ON`, опциональный header
+`<event_hub/calendar_scheduler.hpp>` добавляет daily, weekly, monthly и custom
+calendar rules поверх `TaskManager`. Он вычисляет следующий UTC calendar occurrence через
+`time-shield-cpp`, ставит одну steady-clock задачу и после callback-а планирует
+следующую. Часовой пояс по умолчанию - UTC/GMT; в опциях есть
+`time_shield::ZonedClock`, UTC millisecond `now_provider`, политики missed-run
+и overlap, persisted `last_due_utc_ms` и observer callback-и для событий
+created/scheduled/due/callback/missed/cancelled. Для частых настроек есть
+helpers `CalendarTaskOptions::in_zone(...)`,
+`CalendarTaskOptions::fixed_utc_offset(...)` и
+`CalendarTaskOptions::with_clock(...)`. Для time-shield NTP передайте
+`time_shield::ZonedClock(zone, true)` в build-е с включенным NTP. Для named
+zones локальное время в DST gap пропускается, а неоднозначное локальное время
+при DST fold планируется один раз на первое UTC-вхождение.
+
+Для читаемого wall-clock времени используйте `time_of_day(...)`, а для правил
+на несколько дней - fluent schedule builders. Это время внутри настроенного
+calendar day, а не текущее локальное время компьютера. `CalendarScheduler`
+работает с секундной точностью для daily/weekly/monthly правил, поэтому
+ненулевой аргумент миллисекунд отклоняется этими API:
+
+```cpp
+calendar.add_daily_task(event_hub::time_of_day(18, 30), [] {});
+
+auto weekly = event_hub::WeeklySchedule{}
+    .add(event_hub::MON, event_hub::time_of_day(9, 0))
+    .add(event_hub::FRI, event_hub::time_of_day(18, 0));
+calendar.add_weekly_task(std::move(weekly), [] {});
+
+auto monthly = event_hub::MonthlySchedule{}
+    .add(15, event_hub::time_of_day(12, 0));
+calendar.add_monthly_task(std::move(monthly), [] {});
+```
+
+`TaskManager` должен жить дольше `CalendarScheduler`. Деструктор scheduler-а
+отменяет queued one-shot задачи, но не ждёт callbacks, которые уже начали
+выполняться. Observer может вызываться из `cancel()`, `cancel_all()` и
+деструктора, поэтому callbacks и observers, которые захватывают внешние
+объекты, должны защищать их lifetime на стороне пользователя.
 
 ## RunLoop
 
@@ -295,10 +351,15 @@ c++ main.cpp -std=c++17 $(pkg-config --cflags --libs event-hub-cpp)
 
 ### Заметки Об Интеграции
 
-- `event_hub::event_hub` - header-only target без внешних зависимостей.
+- `event_hub::event_hub` - header-only target без внешних зависимостей по
+  умолчанию.
 - Потребителям нужен компилятор с поддержкой C++17 или новее.
 - При подключении через `add_subdirectory` примеры и тесты по умолчанию
   выключены, если `event-hub-cpp` не является top-level проектом.
+- Опциональные utilities `CalendarScheduler` используют `time-shield-cpp` из
+  submodule `external/time-shield-cpp`, если собрать с
+  `-DEVENT_HUB_CPP_USE_TIME_SHIELD=ON`. NTP выключен по умолчанию; включается
+  через `-DEVENT_HUB_CPP_USE_TIME_SHIELD_NTP=ON`.
 
 ## Сборка И Тесты
 
@@ -360,6 +421,16 @@ CI также проверяет подключение установленно
   periodic-задачи `TaskManager` с immediate start, delayed first cycle,
   fixed-delay/fixed-rate scheduling, context self-cancel, self-reschedule и
   обработанными ошибками.
+- [calendar_scheduler.cpp](examples/calendar_scheduler.cpp) - опциональные
+  `CalendarScheduler` rules поверх `TaskManager`; полный пример требует
+  `EVENT_HUB_CPP_USE_TIME_SHIELD=ON`.
+- [calendar_scheduler_ntp.cpp](examples/calendar_scheduler_ntp.cpp) -
+  настройка `CalendarScheduler` на NTP-время через time-shield; требует
+  `EVENT_HUB_CPP_USE_TIME_SHIELD=ON` и
+  `EVENT_HUB_CPP_USE_TIME_SHIELD_NTP=ON`.
+- [calendar_scheduler_custom_time.cpp](examples/calendar_scheduler_custom_time.cpp) -
+  пользовательский UTC millisecond time provider и CET-rule около перехода на
+  зимнее время.
 - [task_manager_with_bus.cpp](examples/task_manager_with_bus.cpp) - ручной
   shared-notifier loop для `EventBus` и `TaskManager`.
 - [run_loop.cpp](examples/run_loop.cpp) - удобный `RunLoop` для одной шины и

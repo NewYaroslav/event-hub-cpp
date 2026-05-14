@@ -28,6 +28,12 @@ Core files:
   `TaskOptions`, `PeriodicSchedule`, `PeriodicTaskOptions`, and move-only
   `Task`.
 - `include/event_hub/task_manager.hpp` defines the passive task queue.
+- `include/event_hub/calendar_scheduler.hpp` defines the public
+  `CalendarScheduler` class.
+- `include/event_hub/calendar_scheduler/types.hpp` holds public calendar DTOs,
+  observer payloads, policies, and options.
+- `include/event_hub/calendar_scheduler/detail.hpp` holds internal next-run
+  calculation helpers and scheduler state.
 
 Important choices:
 
@@ -48,6 +54,14 @@ Important choices:
   are pruned or skipped later. Do not add eager O(n) removal as the main path.
 - `TaskId` values are monotonic within one manager lifetime; `0` means invalid
   or rejected.
+- `add_task_at_system(...)` converts a
+  `std::chrono::system_clock::time_point` to a steady-clock deadline at
+  submission time. It does not track later system clock changes and should not
+  be described as a full calendar scheduler.
+- `CalendarScheduler` is the calendar scheduler layer. It owns daily, weekly,
+  monthly, or custom rules, computes UTC Unix-millisecond planned times with
+  `time-shield-cpp`, then posts one steady-clock task into `TaskManager`.
+  It still runs only when the application calls `TaskManager::process()`.
 - `process()` takes a snapshot of ready work. Tasks posted by callbacks run on a
   later `process()` call, matching `EventBus`.
 - User callbacks must never run while the queue mutex is held.
@@ -90,6 +104,54 @@ Runtime semantics:
   snapshot semantics. It must not run again in the same snapshot batch.
 - If the callback throws, any requested reschedule is ignored and the normal
   `TaskManager` exception policy applies.
+
+## CalendarScheduler Rules
+
+Use `CalendarScheduler` only for wall-clock calendar patterns such as "daily at
+18:00", selected weekdays, selected month days, or a user-provided next-time
+function. Keep `TaskManager` itself as a steady-clock executor.
+
+Important semantics:
+
+- `CalendarScheduler` is available only when
+  `EVENT_HUB_CPP_USE_TIME_SHIELD=ON`; do not include
+  `calendar_scheduler.hpp` in dependency-free examples unless guarded.
+- Default timezone is UTC/GMT through `time_shield::ZonedClock{}`. A custom
+  `now_provider` must return UTC Unix epoch milliseconds; the `ZonedClock`
+  still defines how local daily/weekly/monthly rules are interpreted.
+- Prefer `CalendarTaskOptions::in_zone(...)`,
+  `CalendarTaskOptions::fixed_utc_offset(...)`, and
+  `CalendarTaskOptions::with_clock(...)` in examples instead of hand-mutating
+  fields. Use `with_clock(time_shield::ZonedClock(zone, true))` for
+  time-shield NTP-backed UTC time in builds configured with
+  `EVENT_HUB_CPP_USE_TIME_SHIELD_NTP=ON`.
+- Prefer `time_of_day(hour, minute, second)` overloads and
+  `WeeklySchedule::add(...)` / `MonthlySchedule::add(...)` builders in public
+  examples. Keep `int second_of_day` overloads for low-level or generated
+  schedules. `time_of_day(...)` means time inside the configured calendar day,
+  not the host machine's current local time. Calendar rules use second
+  granularity, so nonzero milliseconds are rejected by daily/weekly/monthly
+  APIs.
+- The scheduler computes delay from its observed UTC now and submits
+  `TaskManager::add_task_at(...)`. This keeps NTP or custom time providers from
+  being silently reinterpreted through `system_clock::now()`.
+- For named zones, nonexistent local times in DST gaps are skipped. Ambiguous
+  local times in DST folds are scheduled once at the first UTC occurrence.
+- `CalendarTaskId` is stable for the calendar rule. The `TaskContext` seen by a
+  callback is the current one-shot TaskManager task; calling `self.cancel()`
+  stops future calendar scheduling after the current callback returns.
+- The `TaskManager` passed to `CalendarScheduler` must outlive the scheduler.
+  Scheduler destruction cancels queued one-shot tasks but does not wait for
+  callbacks already running.
+- Default missed-run policy is `skip`. Use `run_once_immediately` when a
+  persisted `last_due_utc_ms` should produce one catch-up run.
+- Default overlap/late-after-callback policy is `skip`. Use
+  `queue_one_after_current` when one overdue occurrence should be queued for the
+  next `process()` pass.
+- Observer callbacks are for persistence and telemetry only. They should not be
+  required for correctness, and scheduler code must not hold internal locks
+  while invoking them. Observers may run from `cancel()`, `cancel_all()`, and
+  destruction; user code owns the lifetime of captured objects.
 
 ## Correct Manual Loop
 
@@ -153,6 +215,16 @@ examples only when demonstrating the convenience helper itself.
 - Use `submit()` when a task result is needed through `std::future`.
 - Use `post_batch()` when a producer has several immediate tasks and should
   wake the loop once.
+- Use `add_task_at(...)` or `post_at(...)` when the caller already has a
+  `TaskManager::TimePoint` / `std::chrono::steady_clock::time_point` deadline.
+  Treat this as a monotonic technical deadline, not a wall-clock calendar time.
+- Use `add_task_at_system(...)` for simple one-shot wall-clock submissions.
+  Use `add_task_at_system_ms(...)` when the wall-clock deadline is stored as
+  Unix epoch milliseconds. Calendar patterns such as "daily at 18:00" belong in
+  a separate `CalendarScheduler` layer over `TaskManager`.
+- Use `CalendarScheduler::add_daily_task`, `add_weekly_task`,
+  `add_monthly_task`, or `add_custom_calendar_task` for calendar rules when the
+  optional time-shield integration is enabled.
 - Use `post_every(...)` / `post_every_after(...)` for lightweight repeating
   work. Prefer fixed-delay unless the caller needs planned-deadline timing.
 - Prefer `TaskContext&` callbacks when a task needs to cancel or reschedule
@@ -177,3 +249,6 @@ Task-related changes should cover:
 - notifier wakeups and `recommend_wait_for(...)`;
 - `submit()` futures and move-only task captures;
 - `RunLoop` with multiple task managers and at least one `EventBus`.
+- `CalendarScheduler` daily/weekly/monthly next-time calculations, missed-run
+  and overlap policies, observer event order, custom providers, and
+  cancellation when time-shield integration is enabled.

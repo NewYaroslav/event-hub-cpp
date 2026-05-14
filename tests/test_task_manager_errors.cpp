@@ -141,6 +141,23 @@ int main() {
 
     {
         event_hub::TaskManager tasks;
+        std::function<void()> empty_function;
+
+        EVENT_HUB_TEST_CHECK(tasks.add_task_at_system(
+            event_hub::TaskManager::SystemClock::now(),
+            empty_function) == 0);
+        EVENT_HUB_TEST_CHECK(tasks.add_task_at_system_ms(0,
+                                                         empty_function) == 0);
+
+        tasks.close();
+        EVENT_HUB_TEST_CHECK(tasks.add_task_at_system(
+            event_hub::TaskManager::SystemClock::now(),
+            [] {}) == 0);
+        EVENT_HUB_TEST_CHECK(tasks.add_task_at_system_ms(0, [] {}) == 0);
+    }
+
+    {
+        event_hub::TaskManager tasks;
         int calls = 0;
 
         const auto id = tasks.post_every_ms(1, [&calls] {

@@ -3,7 +3,11 @@
 #define EVENT_HUB_HPP_INCLUDED
 
 /// \file event_hub.hpp
-/// \brief Umbrella header for the event-hub-cpp public API.
+/// \brief Umbrella header for the dependency-free event-hub-cpp public API.
+
+#ifndef EVENT_HUB_CPP_USE_TIME_SHIELD
+#define EVENT_HUB_CPP_USE_TIME_SHIELD 0
+#endif
 
 #include "event_hub/awaiter_interfaces.hpp"
 #include "event_hub/cancellation.hpp"

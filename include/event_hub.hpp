@@ -20,6 +20,7 @@
 #include "event_hub/module.hpp"
 #include "event_hub/module_hub.hpp"
 #include "event_hub/notifier.hpp"
+#include "event_hub/request.hpp"
 #include "event_hub/run_loop.hpp"
 #include "event_hub/task.hpp"
 #include "event_hub/task_manager.hpp"

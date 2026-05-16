@@ -1,13 +1,31 @@
 #include <event_hub.hpp>
 
-#include <cassert>
 #include <chrono>
 #include <future>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
 
 namespace {
+
+void expect(bool condition, const char* message) {
+    if (!condition) {
+        throw std::runtime_error(message);
+    }
+}
+
+template <typename Actual, typename Expected>
+void expect_eq(const Actual& actual,
+               const Expected& expected,
+               const char* expression) {
+    if (!(actual == expected)) {
+        std::ostringstream stream;
+        stream << expression << " failed: actual=" << actual
+               << ", expected=" << expected;
+        throw std::runtime_error(stream.str());
+    }
+}
 
 struct EchoRequest {
     event_hub::RequestId request_id = event_hub::invalid_request_id;
@@ -133,11 +151,11 @@ void test_request_callback() {
             output = result.value;
         });
 
-    assert(id != event_hub::invalid_request_id);
-    assert(bus.process() == 1U);
-    assert(output == 0);
-    assert(bus.process() == 1U);
-    assert(output == 42);
+    expect(id != event_hub::invalid_request_id, "request id must be valid");
+    expect_eq(bus.process(), 1U, "first process count");
+    expect_eq(output, 0, "output before result");
+    expect_eq(bus.process(), 1U, "second process count");
+    expect_eq(output, 42, "output after result");
 }
 
 void test_request_future() {
@@ -151,13 +169,14 @@ void test_request_future() {
 
     auto future = client.request_future<EchoRequest, EchoResult>(event);
 
-    assert(bus.process() == 1U);
-    assert(future.wait_for(std::chrono::milliseconds(0)) ==
-           std::future_status::timeout);
+    expect_eq(bus.process(), 1U, "first future process count");
+    expect(future.wait_for(std::chrono::milliseconds(0)) ==
+               std::future_status::timeout,
+           "future must not be ready before result event is processed");
 
-    assert(bus.process() == 1U);
+    expect_eq(bus.process(), 1U, "second future process count");
     const auto result = future.get();
-    assert(result.value == 14);
+    expect_eq(result.value, 14, "future result value");
 }
 
 void test_request_future_timeout() {
@@ -186,13 +205,14 @@ void test_request_future_timeout() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
-    assert(timeout_called);
+    expect(timeout_called, "timeout callback must be called");
 
     try {
         (void)future.get();
-        assert(false && "request_future must throw after timeout");
+        throw std::runtime_error("request_future must throw after timeout");
     } catch (const event_hub::RequestTimeoutError& error) {
-        assert(error.request_id() != event_hub::invalid_request_id);
+        expect(error.request_id() != event_hub::invalid_request_id,
+               "timeout error request id must be valid");
     }
 }
 
@@ -218,10 +238,10 @@ void test_request_traits_custom_field() {
             output = result.value;
         });
 
-    assert(id != event_hub::invalid_request_id);
-    assert(bus.process() == 1U);
-    assert(bus.process() == 1U);
-    assert(output == 7);
+    expect(id != event_hub::invalid_request_id, "custom request id must be valid");
+    expect_eq(bus.process(), 1U, "first custom process count");
+    expect_eq(bus.process(), 1U, "second custom process count");
+    expect_eq(output, 7, "custom result output");
 }
 
 void test_reply_callback_in_event() {
@@ -244,17 +264,17 @@ void test_reply_callback_in_event() {
         });
 
     client.post<ReplyRequest>(event);
-    assert(bus.process() == 1U);
-    assert(output == 15);
+    expect_eq(bus.process(), 1U, "reply process count");
+    expect_eq(output, 15, "reply output");
 
     auto copy = event.reply;
     EchoResult result;
     result.value = 2;
     copy(result);
-    assert(output == 2);
+    expect_eq(output, 2, "copied reply output");
 
     copy.reset();
-    assert(!copy);
+    expect(!copy, "reset reply must be empty");
 }
 
 void test_event_node_request_helpers() {
@@ -266,16 +286,16 @@ void test_event_node_request_helpers() {
     int output = 0;
     const auto id = node.start(6, output);
 
-    assert(id != event_hub::invalid_request_id);
-    assert(node.allocate_request_id() != id);
-    assert(bus.process() == 1U);
-    assert(bus.process() == 1U);
-    assert(output == 12);
+    expect(id != event_hub::invalid_request_id, "node request id must be valid");
+    expect(node.allocate_request_id() != id, "node request ids must be unique");
+    expect_eq(bus.process(), 1U, "first node process count");
+    expect_eq(bus.process(), 1U, "second node process count");
+    expect_eq(output, 12, "node output");
 
     auto future = node.start_future(8);
-    assert(bus.process() == 1U);
-    assert(bus.process() == 1U);
-    assert(future.get().value == 16);
+    expect_eq(bus.process(), 1U, "first node future process count");
+    expect_eq(bus.process(), 1U, "second node future process count");
+    expect_eq(future.get().value, 16, "node future output");
 }
 
 void test_module_inherits_request_helpers() {
@@ -287,10 +307,10 @@ void test_module_inherits_request_helpers() {
     int output = 0;
     const auto id = module.start(9, output);
 
-    assert(id != event_hub::invalid_request_id);
-    assert(bus.process() == 1U);
-    assert(bus.process() == 1U);
-    assert(output == 18);
+    expect(id != event_hub::invalid_request_id, "module request id must be valid");
+    expect_eq(bus.process(), 1U, "first module process count");
+    expect_eq(bus.process(), 1U, "second module process count");
+    expect_eq(output, 18, "module output");
 }
 
 } // namespace

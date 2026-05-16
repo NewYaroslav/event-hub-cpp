@@ -91,7 +91,7 @@ int main() {
 
         endpoint.subscribe<Ping>([&](const Ping&) {
             calls.push_back(1);
-            endpoint.unsubscribe_all<Ping>();
+            endpoint.unsubscribe<Ping>();
         });
         endpoint.subscribe<Ping>([&](const Ping&) {
             calls.push_back(2);

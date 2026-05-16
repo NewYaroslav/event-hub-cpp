@@ -6,11 +6,15 @@
 
 using namespace event_hub_test;
 
-int main() {
-    constexpr int producer_count = 8;
-    constexpr int items_per_producer = 128;
-    constexpr int expected_total = producer_count * items_per_producer;
+namespace {
 
+constexpr int producer_count = 8;
+constexpr int items_per_producer = 128;
+constexpr int expected_total = producer_count * items_per_producer;
+
+} // namespace
+
+int main() {
     {
         event_hub::EventBus bus;
         event_hub::EventEndpoint endpoint(bus);

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <chrono>
 #include <future>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -179,7 +180,9 @@ void test_request_future_timeout() {
     while (future.wait_for(std::chrono::milliseconds(0)) !=
            std::future_status::ready) {
         (void)bus.process();
-        assert(std::chrono::steady_clock::now() < deadline);
+        if (std::chrono::steady_clock::now() >= deadline) {
+            throw std::runtime_error("request_future timeout test did not complete");
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 

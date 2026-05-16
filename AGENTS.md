@@ -10,7 +10,9 @@ modular applications.
 3. `agents/task-manager-and-run-loop.md` for task scheduling or event-loop
    work.
 4. `agents/modules-and-module-hub.md` for module orchestration work.
-5. The task-specific playbook for C++, headers, dependencies, build/test, or
+5. `agents/request-response-and-reply.md` for request/result workflows and
+   callback-in-event shortcuts.
+6. The task-specific playbook for C++, headers, dependencies, build/test, or
    commits.
 
 ## Project Rules

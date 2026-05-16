@@ -7,10 +7,14 @@
 
 #include "event_awaiter.hpp"
 #include "event_bus.hpp"
+#include "request.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <exception>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <type_traits>
@@ -331,6 +335,84 @@ public:
             [](const EventType&) { return true; },
             std::forward<Callback>(callback),
             std::move(options));
+    }
+
+    /// \brief Post a request event and await the paired result event.
+    /// \tparam RequestEvent Request event type.
+    /// \tparam ResultEvent Result event type.
+    /// \tparam Callback Callback type invocable with `const ResultEvent&`.
+    /// \param request Request event. Its request id is overwritten.
+    /// \param callback Callback invoked for the first result with the same id.
+    /// \param options Timeout and cancellation options for the awaiter.
+    /// \return Generated request id stored in the request event.
+    template <typename RequestEvent,
+              typename ResultEvent,
+              typename Callback,
+              typename std::enable_if<
+                  std::is_invocable_v<Callback&, const ResultEvent&>,
+                  int>::type = 0>
+    RequestId request(RequestEvent request,
+                      Callback&& callback,
+                      AwaitOptions options = {}) {
+        const auto id = next_request_id();
+        RequestTraits<RequestEvent>::set_id(request, id);
+
+        await_once<ResultEvent>(
+            [id](const ResultEvent& result) {
+                return RequestTraits<ResultEvent>::get_id(result) == id;
+            },
+            std::forward<Callback>(callback),
+            std::move(options));
+
+        post<RequestEvent>(std::move(request));
+        return id;
+    }
+
+    /// \brief Post a request event and return a future for the paired result.
+    /// \tparam RequestEvent Request event type.
+    /// \tparam ResultEvent Result event type.
+    /// \param request Request event. Its request id is overwritten.
+    /// \param options Timeout and cancellation options for the awaiter.
+    /// \return Future completed by the first matching result event.
+    template <typename RequestEvent, typename ResultEvent>
+    std::future<ResultEvent> request_future(RequestEvent request,
+                                            AwaitOptions options = {}) {
+        auto promise = std::make_shared<std::promise<ResultEvent>>();
+        auto completed = std::make_shared<std::atomic_bool>(false);
+        auto request_id = std::make_shared<RequestId>(invalid_request_id);
+        auto future = promise->get_future();
+
+        auto user_on_timeout = std::move(options.on_timeout);
+        options.on_timeout = [promise, completed, request_id, user_on_timeout] {
+            bool expected = false;
+            if (completed->compare_exchange_strong(expected, true,
+                                                   std::memory_order_relaxed)) {
+                promise->set_exception(
+                    std::make_exception_ptr(RequestTimeoutError(*request_id)));
+            }
+            if (user_on_timeout) {
+                user_on_timeout();
+            }
+        };
+
+        *request_id = this->request<RequestEvent, ResultEvent>(
+            std::move(request),
+            [promise, completed](const ResultEvent& result) {
+                bool expected = false;
+                if (completed->compare_exchange_strong(expected, true,
+                                                       std::memory_order_relaxed)) {
+                    promise->set_value(result);
+                }
+            },
+            std::move(options));
+
+        return future;
+    }
+
+    /// \brief Return the next bus-wide request id.
+    /// \return Generated request id.
+    RequestId next_request_id() noexcept {
+        return m_bus.next_request_id();
     }
 
     /// \brief Cancel all awaiters created by this endpoint.

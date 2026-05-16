@@ -9,6 +9,7 @@
 #include "event.hpp"
 #include "event_listener.hpp"
 #include "notifier.hpp"
+#include "request.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -95,6 +96,12 @@ public:
     void set_exception_handler(ExceptionHandler handler) {
         std::lock_guard<std::mutex> lock(m_exception_handler_mutex);
         m_exception_handler = std::move(handler);
+    }
+
+    /// \brief Return a bus-wide request id for request-response event pairs.
+    /// \return Generated request id that is unique for this EventBus instance.
+    RequestId next_request_id() noexcept {
+        return m_request_ids.next();
     }
 
     /// \brief Subscribe an owner to a concrete event type.
@@ -567,6 +574,7 @@ private:
     ExceptionHandler m_exception_handler;
 
     std::atomic<SubscriptionId> m_next_subscription_id{1};
+    RequestIdGenerator m_request_ids;
     std::atomic<INotifier*> m_notifier{nullptr};
 };
 

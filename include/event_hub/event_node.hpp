@@ -10,6 +10,7 @@
 #include "event_endpoint.hpp"
 #include "event_listener.hpp"
 
+#include <future>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -215,6 +216,44 @@ protected:
                   int>::type = 0>
     void post(Args&&... args) {
         m_endpoint.post<EventType>(std::forward<Args>(args)...);
+    }
+
+    /// \brief Post a request and await the paired result event.
+    /// \tparam RequestEvent Request event type.
+    /// \tparam ResultEvent Result event type.
+    /// \tparam Callback Callback type invocable with `const ResultEvent&`.
+    /// \param request Request event. Its request id is overwritten.
+    /// \param callback Callback invoked for the first result with the same id.
+    /// \param options Timeout and cancellation options for the awaiter.
+    /// \return Generated request id stored in the request event.
+    template <typename RequestEvent, typename ResultEvent, typename Callback>
+    RequestId request(RequestEvent request,
+                      Callback&& callback,
+                      AwaitOptions options = {}) {
+        return m_endpoint.template request<RequestEvent, ResultEvent>(
+            std::move(request),
+            std::forward<Callback>(callback),
+            std::move(options));
+    }
+
+    /// \brief Post a request and return a future for the paired result event.
+    /// \tparam RequestEvent Request event type.
+    /// \tparam ResultEvent Result event type.
+    /// \param request Request event. Its request id is overwritten.
+    /// \param options Timeout and cancellation options for the awaiter.
+    /// \return Future completed by the first matching result event.
+    template <typename RequestEvent, typename ResultEvent>
+    std::future<ResultEvent> request_future(RequestEvent request,
+                                            AwaitOptions options = {}) {
+        return m_endpoint.template request_future<RequestEvent, ResultEvent>(
+            std::move(request),
+            std::move(options));
+    }
+
+    /// \brief Return the next bus-wide request id.
+    /// \return Generated request id.
+    RequestId next_request_id() noexcept {
+        return m_endpoint.next_request_id();
     }
 
     /// \brief Return the internal endpoint.

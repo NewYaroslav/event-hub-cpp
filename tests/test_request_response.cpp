@@ -174,8 +174,14 @@ void test_request_future_timeout() {
 
     auto future = client.request_future<EchoRequest, EchoResult>(event, options);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    (void)bus.process();
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(250);
+    while (future.wait_for(std::chrono::milliseconds(0)) !=
+           std::future_status::ready) {
+        (void)bus.process();
+        assert(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 
     assert(timeout_called);
 

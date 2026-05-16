@@ -9,6 +9,7 @@
 #include <future>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace event_hub_test {
 
@@ -31,10 +32,42 @@ inline void check(bool condition,
 
 template <typename Future>
 void require_ready(Future& future,
-                  std::chrono::milliseconds timeout =
-                      std::chrono::seconds(2)) {
+                   std::chrono::milliseconds timeout =
+                       std::chrono::seconds(2)) {
     check(future.wait_for(timeout) == std::future_status::ready,
           "future.wait_for(timeout) == std::future_status::ready",
+          __FILE__,
+          __LINE__);
+}
+
+template <typename Predicate>
+void require_until(Predicate&& predicate,
+                   std::chrono::milliseconds timeout =
+                       std::chrono::seconds(2)) {
+    const auto deadline = event_hub::TaskManager::Clock::now() + timeout;
+    while (event_hub::TaskManager::Clock::now() < deadline) {
+        if (predicate()) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    check(predicate(), "predicate()", __FILE__, __LINE__);
+}
+
+inline void wait_until_processed(event_hub::TaskManager& tasks,
+                                 std::size_t expected_count,
+                                 std::chrono::milliseconds timeout =
+                                     std::chrono::seconds(2)) {
+    std::size_t processed = 0;
+    require_until(
+        [&] {
+            processed += tasks.process();
+            return processed >= expected_count;
+        },
+        timeout);
+    check(processed == expected_count,
+          "processed == expected_count",
           __FILE__,
           __LINE__);
 }

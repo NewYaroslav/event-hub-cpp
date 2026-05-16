@@ -49,9 +49,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [ asan-ubsan, vcpkg-install ]
+        suite: [ asan-ubsan, time-shield-calendar, time-shield-install-consumer, vcpkg-install ]
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Configure (asan-ubsan)
         if: matrix.suite == 'asan-ubsan'
@@ -62,6 +64,35 @@ jobs:
       - name: Test (asan-ubsan)
         if: matrix.suite == 'asan-ubsan'
         run: ctest --test-dir build --output-on-failure --timeout 30
+
+      - name: Configure (time-shield-calendar)
+        if: matrix.suite == 'time-shield-calendar'
+        run: cmake -S . -B build-calendar -DEVENT_HUB_CPP_BUILD_TESTS=ON -DEVENT_HUB_CPP_BUILD_EXAMPLES=ON -DEVENT_HUB_CPP_USE_TIME_SHIELD=ON -DCMAKE_CXX_STANDARD=17
+      - name: Build (time-shield-calendar)
+        if: matrix.suite == 'time-shield-calendar'
+        run: cmake --build build-calendar
+      - name: Test (time-shield-calendar)
+        if: matrix.suite == 'time-shield-calendar'
+        run: ctest --test-dir build-calendar --output-on-failure --timeout 30
+
+      - name: Configure package with time-shield
+        if: matrix.suite == 'time-shield-install-consumer'
+        run: cmake -S . -B build-ts-install -DEVENT_HUB_CPP_BUILD_TESTS=ON -DEVENT_HUB_CPP_BUILD_EXAMPLES=ON -DEVENT_HUB_CPP_USE_TIME_SHIELD=ON -DCMAKE_CXX_STANDARD=17 -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install-ts
+      - name: Build package with time-shield
+        if: matrix.suite == 'time-shield-install-consumer'
+        run: cmake --build build-ts-install
+      - name: Install package with time-shield
+        if: matrix.suite == 'time-shield-install-consumer'
+        run: cmake --install build-ts-install --prefix install-ts
+      - name: Configure install consumer with time-shield
+        if: matrix.suite == 'time-shield-install-consumer'
+        run: cmake -S tests/install_consumer -B build-ts-consumer -DCMAKE_PREFIX_PATH="${{ github.workspace }}/install-ts;${{ github.workspace }}/build-ts-install/external/time-shield-cpp" -DEVENT_HUB_CPP_INSTALL_CONSUMER_USE_CALENDAR=ON -DCMAKE_CXX_STANDARD=17
+      - name: Build install consumer with time-shield
+        if: matrix.suite == 'time-shield-install-consumer'
+        run: cmake --build build-ts-consumer
+      - name: Test install consumer with time-shield
+        if: matrix.suite == 'time-shield-install-consumer'
+        run: ctest --test-dir build-ts-consumer --output-on-failure --timeout 30
 
       - name: Install vcpkg
         if: matrix.suite == 'vcpkg-install'
@@ -89,6 +120,12 @@ jobs:
           path: |
             build/CMakeFiles/CMakeOutput.log
             build/Testing/Temporary/LastTest.log
+            build-calendar/CMakeFiles/CMakeOutput.log
+            build-calendar/Testing/Temporary/LastTest.log
+            build-ts-install/CMakeFiles/CMakeOutput.log
+            build-ts-install/Testing/Temporary/LastTest.log
+            build-ts-consumer/CMakeFiles/CMakeOutput.log
+            build-ts-consumer/Testing/Temporary/LastTest.log
             build-vcpkg-consumer/CMakeFiles/CMakeOutput.log
             build-vcpkg-consumer/Testing/Temporary/LastTest.log
           if-no-files-found: ignore

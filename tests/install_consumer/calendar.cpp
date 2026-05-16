@@ -6,8 +6,8 @@
 
 int main() {
     event_hub::TaskManager tasks;
-    event_hub::CalendarScheduler calendar(tasks);
     std::vector<event_hub::CalendarObserverInfo> events;
+    event_hub::CalendarScheduler calendar(tasks);
 
     event_hub::CalendarTaskOptions options;
     options.now_provider = [] {
@@ -35,5 +35,9 @@ int main() {
         0,
         0);
 
-    return events[1].planned_utc_ms == expected ? 0 : 1;
+    if (events[1].planned_utc_ms != expected) {
+        return 1;
+    }
+
+    return calendar.cancel(id) ? 0 : 1;
 }

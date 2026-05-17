@@ -41,6 +41,31 @@ Key characteristics:
   expires.
 - Header-only C++17 with no required external dependencies.
 
+## Recommended Project Structure
+
+For larger applications, prefer a module-oriented layout:
+
+```text
+src/<module>.hpp
+src/<module>/module.hpp
+src/<module>/events.hpp
+src/<module>/data/
+src/<module>/providers/
+src/<module>/adapters/
+src/<module>/detail/
+```
+
+`data/` contains pure DTOs and configs. `events.hpp` contains event-bus
+contracts. `module.hpp` is the component entry point used by composition roots.
+`providers/` contains backend implementations. `adapters/` contains bridges to
+event bus, HTTP, CLI, Telegram, WebSocket, or other transports.
+
+Module-level `module.hpp` files should document the module's event API with
+Doxygen comments: accepted request events, published result/notification events,
+request/result correlation, and processing assumptions.
+
+See [docs/project-structure.md](docs/project-structure.md) for the full guide.
+
 ## Header Layout
 
 | Header | Purpose |

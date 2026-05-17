@@ -38,26 +38,34 @@ explicitly uses a flat structure.
 Use this layout for each module:
 
 ```text
-src/<module>.hpp
-src/<module>/module.hpp
-src/<module>/events.hpp
-src/<module>/data/
-src/<module>/providers/
-src/<module>/adapters/
-src/<module>/detail/
+src/
+├── <module>.hpp
+└── <module>/
+    ├── module.hpp
+    ├── events.hpp
+    ├── data/
+    ├── providers/
+    ├── adapters/
+    └── detail/
 ```
 
 Example:
 
 ```text
-src/market_data.hpp
-src/market_data/module.hpp
-src/market_data/events.hpp
-src/market_data/data/config.hpp
-src/market_data/data/commands.hpp
-src/market_data/providers.hpp
-src/market_data/adapters/
-src/market_data/detail/
+src/
+├── market_data.hpp
+└── market_data/
+    ├── module.hpp
+    ├── events.hpp
+    ├── data/
+    │   ├── config.hpp
+    │   ├── commands.hpp
+    │   ├── config/
+    │   └── commands/
+    ├── providers.hpp
+    ├── providers/
+    ├── adapters/
+    └── detail/
 ```
 
 Use the same pattern for every module. Consistency is more important than
@@ -68,16 +76,18 @@ inventing a new layout per module.
 Use:
 
 ```text
-include/<module>.hpp
-include/<module>/module.hpp
-include/<module>/events.hpp
-include/<module>/data/
-include/<module>/providers/
-include/<module>/adapters/
-
-src/
-tests/
-examples/
+<module-repo>/
+├── include/
+│   ├── <module>.hpp
+│   └── <module>/
+│       ├── module.hpp
+│       ├── events.hpp
+│       ├── data/
+│       ├── providers/
+│       └── adapters/
+├── src/
+├── tests/
+└── examples/
 ```
 
 Public headers belong in `include/`. Private implementation belongs in `src/`.
@@ -89,11 +99,13 @@ Public headers belong in `include/`. Private implementation belongs in `src/`.
 It can include:
 
 ```text
-module.hpp
-events.hpp
-data/config.hpp
-data/commands.hpp
-providers.hpp
+<module>.hpp
+└── includes:
+    ├── <module>/module.hpp
+    ├── <module>/events.hpp
+    ├── <module>/data/config.hpp
+    ├── <module>/data/commands.hpp
+    └── <module>/providers.hpp
 ```
 
 Do not include private `detail/` headers from the broad umbrella.
@@ -177,17 +189,29 @@ Keep event-bus metadata such as `request_id` in events, not in pure DTOs.
 
 Use one `events.hpp` while event declarations are short. Split into
 `events/*.hpp` only when the file becomes large or event groups become
-independent.
+independent:
+
+```text
+market_data/
+├── events.hpp
+└── events/
+    ├── quote_requested_event.hpp
+    ├── quote_received_event.hpp
+    └── events.hpp
+```
 
 ## Meaning Of data/commands/
 
 Put request/response operation DTOs here:
 
 ```text
-data/commands/quote_request.hpp
-data/commands/quote_response.hpp
-data/commands/candles_request.hpp
-data/commands/candles_response.hpp
+market_data/
+└── data/
+    └── commands/
+        ├── quote_request.hpp
+        ├── quote_response.hpp
+        ├── candles_request.hpp
+        └── candles_response.hpp
 ```
 
 These DTOs should be usable without `event_hub`.
@@ -204,8 +228,11 @@ Put configs, errors, and simple selection enums here.
 Prefer precise names:
 
 ```text
-market_data_provider_type.hpp
-market_data_service_config.hpp
+market_data/
+└── data/
+    └── config/
+        ├── market_data_provider_type.hpp
+        └── market_data_service_config.hpp
 ```
 
 Do not use vague names such as `service.hpp` for an enum that only selects a
@@ -218,10 +245,13 @@ Use providers for interchangeable backend implementations or external APIs.
 Examples:
 
 ```text
-websocket_market_data_provider.hpp
-rest_market_data_provider.hpp
-mock_market_data_provider.hpp
-market_data_provider_factory.hpp
+market_data/
+├── providers.hpp
+└── providers/
+    ├── websocket_market_data_provider.hpp
+    ├── rest_market_data_provider.hpp
+    ├── mock_market_data_provider.hpp
+    └── market_data_provider_factory.hpp
 ```
 
 Provider interfaces should stay small and close to the module domain.
@@ -231,11 +261,12 @@ Provider interfaces should stay small and close to the module domain.
 Use adapters for bridges between module services and transports:
 
 ```text
-event-bus adapter
-HTTP adapter
-CLI adapter
-Telegram adapter
-WebSocket adapter
+adapters/
+├── event-bus adapter
+├── HTTP adapter
+├── CLI adapter
+├── Telegram adapter
+└── WebSocket adapter
 ```
 
 If there is only one adapter, keeping it at the module root is acceptable.

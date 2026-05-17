@@ -12,7 +12,10 @@ modular applications.
 4. `agents/modules-and-module-hub.md` for module orchestration work.
 5. `agents/request-response-and-reply.md` for request/result workflows and
    callback-in-event shortcuts.
-6. The task-specific playbook for C++, headers, dependencies, build/test, or
+6. `agents/project-structure.md` for recommended layouts of modules,
+   standalone repositories, DTOs, events, providers, adapters, and `module.hpp`
+   entry points.
+7. The task-specific playbook for C++, headers, dependencies, build/test, or
    commits.
 
 ## Project Rules

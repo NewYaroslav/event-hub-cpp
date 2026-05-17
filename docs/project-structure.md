@@ -47,67 +47,61 @@ and one broad umbrella header per module:
 
 ```text
 src/
-  market_data.hpp
-  order_routing.hpp
-  risk_control.hpp
-  notifications.hpp
-  persistence.hpp
-  analytics.hpp
-
-  market_data/
-    module.hpp
-    events.hpp
-
-    data/
-      config.hpp
-      commands.hpp
-
-      config/
-        market_data_config.hpp
-        market_data_error.hpp
-        market_data_provider_type.hpp
-
-      commands/
-        quote_request.hpp
-        quote_response.hpp
-        candles_request.hpp
-        candles_response.hpp
-        subscribe_quotes_request.hpp
-        subscribe_quotes_response.hpp
-
-    providers.hpp
-    providers/
-      market_data_provider.hpp
-      market_data_provider_factory.hpp
-      websocket_market_data_provider.hpp
-      rest_market_data_provider.hpp
-      mock_market_data_provider.hpp
-
-    adapters/
-      market_data_event_api.hpp
-      market_data_event_api.cpp
-      market_data_http_api.hpp
-      market_data_websocket_api.hpp
-
-    detail/
-      symbol_normalizer.hpp
-      retry_state.hpp
-      provider_response_parser.hpp
-
-    market_data_service.hpp
-    market_data_service.cpp
+├── market_data.hpp
+├── order_routing.hpp
+├── risk_control.hpp
+├── notifications.hpp
+├── persistence.hpp
+├── analytics.hpp
+└── market_data/
+    ├── module.hpp
+    ├── events.hpp
+    ├── data/
+    │   ├── config.hpp
+    │   ├── commands.hpp
+    │   ├── config/
+    │   │   ├── market_data_config.hpp
+    │   │   ├── market_data_error.hpp
+    │   │   └── market_data_provider_type.hpp
+    │   └── commands/
+    │       ├── quote_request.hpp
+    │       ├── quote_response.hpp
+    │       ├── candles_request.hpp
+    │       ├── candles_response.hpp
+    │       ├── subscribe_quotes_request.hpp
+    │       └── subscribe_quotes_response.hpp
+    ├── providers.hpp
+    ├── providers/
+    │   ├── market_data_provider.hpp
+    │   ├── market_data_provider_factory.hpp
+    │   ├── websocket_market_data_provider.hpp
+    │   ├── rest_market_data_provider.hpp
+    │   └── mock_market_data_provider.hpp
+    ├── adapters/
+    │   ├── market_data_event_api.hpp
+    │   ├── market_data_event_api.cpp
+    │   ├── market_data_http_api.hpp
+    │   └── market_data_websocket_api.hpp
+    ├── detail/
+    │   ├── symbol_normalizer.hpp
+    │   ├── retry_state.hpp
+    │   └── provider_response_parser.hpp
+    ├── market_data_service.hpp
+    └── market_data_service.cpp
 ```
 
 Use the same pattern for other modules:
 
 ```text
-src/<module>.hpp
-src/<module>/module.hpp
-src/<module>/events.hpp
-src/<module>/data/
-src/<module>/providers/
-src/<module>/adapters/
-src/<module>/detail/
+src/
+├── <module>.hpp
+└── <module>/
+    ├── module.hpp
+    ├── events.hpp
+    ├── data/
+    ├── providers/
+    ├── adapters/
+    └── detail/
 ```
 
 This makes composition roots explicit:
@@ -129,48 +123,40 @@ headers into `include/` and implementation into `src/`:
 
 ```text
 market-data/
-  include/
-    market_data.hpp
-
-    market_data/
-      module.hpp
-      events.hpp
-
-      data/
-        config.hpp
-        commands.hpp
-
-        config/
-          market_data_config.hpp
-          market_data_error.hpp
-          market_data_provider_type.hpp
-
-        commands/
-          quote_request.hpp
-          quote_response.hpp
-          candles_request.hpp
-          candles_response.hpp
-
-      providers.hpp
-      providers/
-        market_data_provider.hpp
-        market_data_provider_factory.hpp
-
-      adapters/
-        market_data_event_api.hpp
-
-  src/
-    market_data_service.cpp
-    adapters/
-      market_data_event_api.cpp
-    providers/
-      websocket_market_data_provider.cpp
-      rest_market_data_provider.cpp
-      mock_market_data_provider.cpp
-
-  tests/
-  examples/
-  CMakeLists.txt
+├── include/
+│   ├── market_data.hpp
+│   └── market_data/
+│       ├── module.hpp
+│       ├── events.hpp
+│       ├── data/
+│       │   ├── config.hpp
+│       │   ├── commands.hpp
+│       │   ├── config/
+│       │   │   ├── market_data_config.hpp
+│       │   │   ├── market_data_error.hpp
+│       │   │   └── market_data_provider_type.hpp
+│       │   └── commands/
+│       │       ├── quote_request.hpp
+│       │       ├── quote_response.hpp
+│       │       ├── candles_request.hpp
+│       │       └── candles_response.hpp
+│       ├── providers.hpp
+│       ├── providers/
+│       │   ├── market_data_provider.hpp
+│       │   └── market_data_provider_factory.hpp
+│       └── adapters/
+│           └── market_data_event_api.hpp
+├── src/
+│   ├── market_data_service.cpp
+│   ├── adapters/
+│   │   └── market_data_event_api.cpp
+│   └── providers/
+│       ├── websocket_market_data_provider.cpp
+│       ├── rest_market_data_provider.cpp
+│       └── mock_market_data_provider.cpp
+├── tests/
+├── examples/
+└── CMakeLists.txt
 ```
 
 External users can choose the include level:
@@ -332,12 +318,14 @@ market_data/events.hpp
 or, for larger modules:
 
 ```text
-market_data/events/
-  quote_requested_event.hpp
-  quote_received_event.hpp
-  candles_requested_event.hpp
-  candles_received_event.hpp
-  events.hpp
+market_data/
+├── events.hpp
+└── events/
+    ├── quote_requested_event.hpp
+    ├── quote_received_event.hpp
+    ├── candles_requested_event.hpp
+    ├── candles_received_event.hpp
+    └── events.hpp
 ```
 
 Do not place event-bus wrappers into `data/` unless the module is intentionally
@@ -377,12 +365,15 @@ module lifecycle.
 Good examples:
 
 ```text
-data/config/market_data_config.hpp
-data/config/market_data_error.hpp
-data/config/market_data_provider_type.hpp
-
-data/commands/quote_request.hpp
-data/commands/quote_response.hpp
+market_data/
+└── data/
+    ├── config/
+    │   ├── market_data_config.hpp
+    │   ├── market_data_error.hpp
+    │   └── market_data_provider_type.hpp
+    └── commands/
+        ├── quote_request.hpp
+        └── quote_response.hpp
 ```
 
 Bad examples for `data/`:
@@ -401,12 +392,15 @@ wrappers.
 Use `data/commands/` for operation payloads:
 
 ```text
-quote_request.hpp
-quote_response.hpp
-candles_request.hpp
-candles_response.hpp
-subscribe_quotes_request.hpp
-subscribe_quotes_response.hpp
+market_data/
+└── data/
+    └── commands/
+        ├── quote_request.hpp
+        ├── quote_response.hpp
+        ├── candles_request.hpp
+        ├── candles_response.hpp
+        ├── subscribe_quotes_request.hpp
+        └── subscribe_quotes_response.hpp
 ```
 
 These are not event-bus events. They are payload DTOs used by services and
@@ -438,9 +432,12 @@ operation inputs and outputs.
 Use `data/config/` for configuration and related enums:
 
 ```text
-market_data_config.hpp
-market_data_error.hpp
-market_data_provider_type.hpp
+market_data/
+└── data/
+    └── config/
+        ├── market_data_config.hpp
+        ├── market_data_error.hpp
+        └── market_data_provider_type.hpp
 ```
 
 Prefer precise names. For example, if a type selects a provider/backend, prefer:
@@ -473,12 +470,14 @@ interchangeable behavior.
 Examples:
 
 ```text
-providers/
-  market_data_provider.hpp
-  market_data_provider_factory.hpp
-  websocket_market_data_provider.hpp
-  rest_market_data_provider.hpp
-  mock_market_data_provider.hpp
+market_data/
+├── providers.hpp
+└── providers/
+    ├── market_data_provider.hpp
+    ├── market_data_provider_factory.hpp
+    ├── websocket_market_data_provider.hpp
+    ├── rest_market_data_provider.hpp
+    └── mock_market_data_provider.hpp
 ```
 
 A provider usually answers:
@@ -505,12 +504,13 @@ communication mechanisms.
 Examples:
 
 ```text
-adapters/
-  market_data_event_api.hpp
-  market_data_event_api.cpp
-  market_data_http_api.hpp
-  market_data_cli_api.hpp
-  market_data_websocket_api.hpp
+market_data/
+└── adapters/
+    ├── market_data_event_api.hpp
+    ├── market_data_event_api.cpp
+    ├── market_data_http_api.hpp
+    ├── market_data_cli_api.hpp
+    └── market_data_websocket_api.hpp
 ```
 
 An event adapter bridges:
@@ -540,8 +540,9 @@ If there is only one adapter and the module is small, keeping it at module root
 is acceptable:
 
 ```text
-market_data_event_api.hpp
-market_data_event_api.cpp
+market_data/
+├── market_data_event_api.hpp
+└── market_data_event_api.cpp
 ```
 
 Introduce `adapters/` when:
@@ -559,10 +560,11 @@ API.
 Examples:
 
 ```text
-detail/
-  symbol_normalizer.hpp
-  retry_state.hpp
-  provider_response_parser.hpp
+market_data/
+└── detail/
+    ├── symbol_normalizer.hpp
+    ├── retry_state.hpp
+    └── provider_response_parser.hpp
 ```
 
 Rules:
@@ -765,9 +767,11 @@ Split when:
 Good examples:
 
 ```text
-events.hpp              fine for a few short event structs
-data/commands/*.hpp     useful when request/response DTOs grow
-providers/*.hpp         useful because providers are independent
+market_data/
+├── events.hpp              # fine for a few short event structs
+├── data/
+│   └── commands/*.hpp      # useful when request/response DTOs grow
+└── providers/*.hpp         # useful because providers are independent
 ```
 
 ## Practical Include Levels
